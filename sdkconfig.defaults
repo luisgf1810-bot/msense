@@ -1,0 +1,34 @@
+#
+# Arduino ESP32
+#
+CONFIG_AUTOSTART_ARDUINO=n
+CONFIG_ARDUHAL_PARTITION_SCHEME_NO_OTA=y
+# end of Arduino ESP32
+
+
+# Compiler
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+
+# Partition
+CONFIG_PARTITION_TABLE_CUSTOM=y
+
+# Serial Flash
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+
+# FREERTOS
+#
+CONFIG_FREERTOS_HZ=1000
+# end of FREERTOS
+# end of Component config
+
+# IDF v6 requirements
+# esp-dsp and other things fail to build with picolibc
+CONFIG_LIBC_NEWLIB=y
+# required for tinyusb and some IDF components to build properly
+CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
+
+# Sense
+CONFIG_ESPNOW_CHANNEL=0
