@@ -10,10 +10,34 @@
 
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "lwip/err.h"
+#include "lwip/sys.h"
 
-#include "initiator.h"
+
+#include "esp_mac.h"
+#include "esp_now.h"
+#include "esp_crc.h"
+
+#define ESPNOW_MAXDELAY 512
+
+#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
+#define H2E_IDENTIFIER ""
+#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 
 
+static EventGroupHandle_t s_wifi_event_group;
+static int s_retry_num = 0;
+
+/* The event group allows multiple bits for each event, but we only care about two events:
+ * - we are connected to the AP with an IP
+ * - we failed to connect after the maximum amount of retries */
+#define WIFI_CONNECTED_BIT  BIT0
+#define WIFI_FAIL_BIT       BIT1
+
+#define ESPNOW_WIFI_IF      WIFI_IF_STA
 
 #define LED_PIN 19U
 #define LED_ON_PIN 20U

@@ -296,16 +296,7 @@ static void espnow_task(void *pvParameter)
                     break;
                 }
 
-                if (!is_broadcast) {
-                    send_param->count--;
-                    if (send_param->count == 0) {
-                        ESP_LOGI(TAG, "Send done");
-                        espnow_deinit(send_param);
-                        vTaskDelete(NULL);
-                    }
-                }
-
-                /* Delay a while before sending the next data. */
+                // Delay a while before sending the next data. 
                 if (send_param->delay > 0) {
                     vTaskDelay(send_param->delay/portTICK_PERIOD_MS);
                 }
@@ -313,7 +304,7 @@ static void espnow_task(void *pvParameter)
                 ESP_LOGI(TAG, "send data to "MACSTR"", MAC2STR(send_cb->mac_addr));
                 memcpy(send_param->dest_mac, send_cb->mac_addr, ESP_NOW_ETH_ALEN);
                 espnow_data_prepare(send_param);
-                /* Send the next data after the previous data is sent. */
+                // Send the next data after the previous data is sent. 
                 if (esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK) {
                     ESP_LOGE(TAG, "Send error");
                     espnow_deinit(send_param);
@@ -345,10 +336,11 @@ static void espnow_task(void *pvParameter)
                         memcpy(peer->lmk, CONFIG_ESPNOW_LMK, ESP_NOW_KEY_LEN);
                         memcpy(peer->peer_addr, recv_cb->mac_addr, ESP_NOW_ETH_ALEN);
                         ESP_ERROR_CHECK( esp_now_add_peer(peer) );
+                        ESP_LOGE(TAG, "Peer "MACSTR"", MAC2STR(recv_cb->mac_addr));
                         free(peer);
                     }
 
-                    /* Indicates that the device has received broadcast ESPNOW data. */
+                    // Indicates that the device has received broadcast ESPNOW data. */
                     if (send_param->state == 0) {
                         send_param->state = 1;
                     }
