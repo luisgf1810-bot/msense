@@ -1,4 +1,3 @@
-
 #include "main.hpp"
 
 
@@ -165,9 +164,126 @@ static void wifi_init()
 
 
 // Espnow
-void espnow
 
+int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
+{
+    espnow_data_t *buf = (espnow_data_t *)data;
+    uint16_t crc, crc_cal = 0;
+
+    if (data_len < sizeof(espnow_data_t)) {
+        ESP_LOGE(MAIN, "Receive ESPNOW data too short, len:%d", data_len);
+        return -1;
+    }
+
+    *state = buf->state;
+    *seq = buf->seq_num;
+    *magic = buf->magic;
+    crc = buf->crc;
+    buf->crc = 0;
+    crc_cal = esp_crc16_le(UINT16_MAX, (uint8_t const *)buf, data_len);
+
+    if (crc_cal == crc) {
+        return buf->type;
+    }
+
+    return -1;
+}
+
+
+static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
+{
+    espnow_event_t evt;
+    espnow_event_recv_cb_t *recv_cb = &evt.info.recv_cb;
+    uint8_t * mac_addr = recv_info->src_addr;
+    uint8_t * des_addr = recv_info->des_addr;
+
+    if (mac_addr == NULL || data == NULL || len <= 0) {
+        ESP_LOGE(MAIN, "Receive cb arg error");
+        return;
+    }
+
+    evt.id = ESPNOW_RECV_CB;
+    memcpy(recv_cb->mac_addr, mac_addr, ESP_NOW_ETH_ALEN);
+    recv_cb->data = (uint8_t *)malloc(len);
+    if (recv_cb->data == NULL) {
+        ESP_LOGE(MAIN, "Malloc receive data fail");
+        return;
+    }
+    memcpy(recv_cb->data, data, len);
+    recv_cb->data_len = len;
+    if (xQueueSend(s_espnow_queue, &evt, ESPNOW_MAXDELAY) != pdTRUE) {
+        ESP_LOGW(MAIN, "Send receive queue fail");
+        free(recv_cb->data);
+    }
+}
+
+static void espnow_task(void *p)
+{
+    espnow_event_t evt;
+    int ret;
+    uint8_t recv_state = 0;
+    uint16_t recv_seq = 0;
+    uint32_t recv_magic = 0;
+
+    while (xQueueReceive(s_espnow_queue, &evt, portMAX_DELAY) == pdTRUE) {
+
+        switch (evt.id) {
+            case ESPNOW_RECV_CB:
+            {
+                espnow_event_recv_cb_t *recv_cb = &evt.info.recv_cb;
+                ret = espnow_data_parse(recv_cb->data, recv_cb->data_len, &recv_state, &recv_seq, &recv_magic);
+                free(recv_cb->data);
+
+                if (ret == ESPNOW_DATA_BROADCAST) {
+                    ESP_LOGI(MAIN, "Receive %dth broadcast data from: "MACSTR"", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+
+                }
+                else if (ret == ESPNOW_DATA_UNICAST) {
+                    ESP_LOGI(MAIN, "Receive %dth unicast data from: "MACSTR", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+
+                }
+                else {
+                    ESP_LOGI(MAIN, "Receive error data from: "MACSTR"", MAC2STR(recv_cb->mac_addr));
+                }
+                break;
+            }
+            default:
+                ESP_LOGE(MAIN, "Callback type error: %d", evt.id);
+                break;
+        }
+    }
+}
+
+void espnow_deinit()
+{
+    vQueueDelete(s_espnow_queue);
+    s_espnow_queue = NULL;
+    esp_now_deinit();
+}
+
+void espnow_init() {
+
+    s_espnow_queue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(espnow_event_t));
+    if (s_espnow_queue == NULL) {
+        ESP_LOGE(MAIN, "Create queue fail");
+        esp_now_deinit();
+        return;
+    }
+
+    ESP_ERROR_CHECK( esp_now_init() );
+    ESP_ERROR_CHECK( esp_now_register_recv_cb(espnow_recv_cb) );
+    ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)CONFIG_ESPNOW_PMK) );
+
+    xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
+}
+
+
+
+
+
+// Main
 void Initialize() {
+
     // init arduino libraries
     initArduino();
 
@@ -191,15 +307,20 @@ void Initialize() {
     wifi_init();
 
     // Espnow init
-
+    espnow_init();
 
 }
+
+
+
+
+
 
 // App main
 extern "C" void app_main()
 {
 
-    //Initialize NVS
+    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -207,11 +328,8 @@ extern "C" void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
-   
     // Init components
     Initialize();
-
-
 
 
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
