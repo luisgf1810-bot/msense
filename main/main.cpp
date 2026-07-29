@@ -180,7 +180,6 @@ static int64_t get_synced_time_us(void)
 }
 
 // Espnow
-
 int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
 {
     espnow_data_t *buf = (espnow_data_t *)data;
@@ -204,7 +203,6 @@ int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t
 
     return -1;
 }
-
 
 static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
@@ -270,7 +268,7 @@ static void espnow_task(void *p)
     }
 }
 
-void espnow_deinit()
+void espnow_deinit(espnow_send_param_t *send_param)
 {
     vQueueDelete(s_espnow_queue);
     s_espnow_queue = NULL;
@@ -286,9 +284,17 @@ void espnow_init() {
         return;
     }
 
-    ESP_ERROR_CHECK( esp_now_init() );
+    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
+    espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
+    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
     ESP_ERROR_CHECK( esp_now_register_recv_cb(espnow_recv_cb) );
     ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)CONFIG_ESPNOW_PMK) );
+
+    // Start as time initiator (controller)
+    espnow_time_initiator_config_t config = {
+        .sync_interval_ms = 30000,  // Broadcast time every 30 seconds
+    };
+    espnow_time_initiator_start(&config);
 
     xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 }
