@@ -163,6 +163,22 @@ static void wifi_init()
 }
 
 
+// ESPNOW time sync
+static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
+        espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
+        s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
+        ESP_LOGI(MAIN, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
+    }
+}
+
+// Get current synchronized time
+static int64_t get_synced_time_us(void)
+{
+    return esp_timer_get_time() + s_time_offset_us;
+}
+
 // Espnow
 
 int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
