@@ -287,14 +287,14 @@ void espnow_init() {
     espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
     espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
     ESP_ERROR_CHECK( espnow_init(&espnow_config) );
-    ESP_ERROR_CHECK( esp_now_register_recv_cb(espnow_recv_cb) );
-    ESP_ERROR_CHECK( esp_now_set_pmk((const uint8_t *)CONFIG_ESPNOW_PMK) );
 
     // Start as time initiator (controller)
     espnow_time_initiator_config_t config = {
         .sync_interval_ms = 30000,  // Broadcast time every 30 seconds
     };
     espnow_time_initiator_start(&config);
+    ESP_LOGI(MAIN, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
+
 
     xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 }
