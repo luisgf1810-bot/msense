@@ -179,6 +179,8 @@ static int64_t get_synced_time_us(void)
     return esp_timer_get_time() + s_time_offset_us;
 }
 
+
+
 // Espnow
 int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t *seq, uint32_t *magic)
 {
@@ -296,11 +298,37 @@ void espnow_init() {
     ESP_LOGI(MAIN, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
 
 
-    xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
+    //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 }
 
 
+// Led
+static void led_task(void *p) {
 
+    uint64_t meshUs = 0;
+    const TickType_t xDelay = 10 / portTICK_PERIOD_MS;
+
+    while (true) {
+
+        // Get mesh time and create synchronized pattern
+        meshUs = get_synced_time_us();
+        uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
+        bool ledOn = phase < 5000;
+        //ESP_LOGI(MAIN, "ledOn: %s", ledOn ? "true" : "false");
+        if (ledOn) {
+            led_strip.LED(0,7,0);
+        } else {
+            led_strip.LED(0,0,0);
+        }
+        vTaskDelay(xDelay);
+    }
+
+}
+void led_init() {
+
+    led_strip.Init();
+    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
+}
 
 
 // Main
@@ -321,15 +349,15 @@ void Initialize() {
 
     // Init BNO085 motion reports
     //Motion_Init();
-    
-    // Init led
-    led_strip.Init();
 
     // WiFi init
     wifi_init();
 
     // Espnow init
     espnow_init();
+
+     // Init led
+    led_init();
 
 }
 
