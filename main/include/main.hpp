@@ -25,9 +25,22 @@
 #include "espnow_time.h"
 #include "esp_sleep.h"
 #include "espnow_utils.h"
+#include "esp_http_client.h"
 
 
+// Influxdb
+#define TAG "INFLUX_APP"
+#define INFLUX_URL "http://192.168.68.114:8086/api/v2/write?org=sense&bucket=bucketone&precision=s"
+#define INFLUX_TOKEN "Token ySWXVH_JfYu5swtJreSMMtBSURcQQjCCEgZghhwp-cww09PhlYdUg9FvMm7pOFJPIf_Avtjk2471XSLqBl1-5Q=="
 
+static QueueHandle_t influx_queue = NULL;
+
+typedef struct {
+    int32_t drift;
+} sensor_data_t;
+
+
+// Pins
 #define LED_PIN 19U
 #define LED_ON_PIN 20U
 #define SENS_ON_PIN 18U
@@ -52,8 +65,11 @@ static int s_retry_num = 0;
 #define ESPNOW_WIFI_IF      WIFI_IF_STA
 
 // Logs
-static const char *MOTION_TAG = "MOTIONTASK";
-static const char *MAIN = "MAIN";
+static const char *MOTION_TAG = "MOTION";
+static const char *WIFI_TAG = "WIFI";
+static const char *INFLUX_TAG = "INFLUX";
+static const char *ESPNOW_TAG = "ESPNOW";
+
 
 // Motion
 float _motion_data[23] = { 0.0 };

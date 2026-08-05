@@ -21,15 +21,15 @@ void Motion_Init() {
 
     Wire.begin(8, 9, 400000);  // SDA on GPIO8, SCL on GPIO9, 400kHz speed
     if (Motion.begin() == false) {
-        ESP_LOGI(MAIN, ">> Error: Motion Sensor not found - Check Hardware");
+        ESP_LOGI(MOTION_TAG, ">> Error: Motion Sensor not found - Check Hardware");
     }
     if (Motion.isConnected() == false) {
-        ESP_LOGI(MAIN, ">> Error: Motion Sensor not found");
+        ESP_LOGI(MOTION_TAG, ">> Error: Motion Sensor not found");
     }
     if (Motion.enableLinearAccelerometer() == true) {
-        ESP_LOGI(MAIN, "Linear Accelerometer Activated  ");
+        ESP_LOGI(MOTION_TAG, "Linear Accelerometer Activated  ");
         } else {
-        ESP_LOGI(MAIN, "Linear Accelerometer Motion: Failed  ");
+        ESP_LOGI(MOTION_TAG, "Linear Accelerometer Motion: Failed  ");
     }
 
     _i2c_write_size = 0;
@@ -85,14 +85,14 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
         if (s_retry_num < CONFIG_ESP_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(MAIN, "retry to connect to the AP");
+            ESP_LOGI(WIFI_TAG, "retry to connect to the AP");
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(MAIN,"connect to the AP fail");
+        ESP_LOGI(WIFI_TAG, "connect to the AP fail");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(MAIN, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -141,7 +141,7 @@ static void wifi_init()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(MAIN, "wifi_init_sta finished.");
+    ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
@@ -154,11 +154,11 @@ static void wifi_init()
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(MAIN, "connected to ap SSID:%s password:%s",  CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
+        ESP_LOGI(WIFI_TAG, "connected to ap SSID:%s password:%s",  CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(MAIN, "Failed to connect to SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
+        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
     } else {
-        ESP_LOGE(MAIN, "UNEXPECTED EVENT");
+        ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
     }
 }
 
@@ -166,10 +166,15 @@ static void wifi_init()
 // ESPNOW time sync
 static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
 {
+     sensor_data_t incoming_data;
     if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
         espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
         s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-        ESP_LOGI(MAIN, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
+        ESP_LOGI(ESPNOW_TAG, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
+        
+        // send to influxdb queue
+        incoming_data.drift = evt->drift_ms;
+        xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
     }
 }
 
@@ -188,7 +193,7 @@ int espnow_data_parse(uint8_t *data, uint16_t data_len, uint8_t *state, uint16_t
     uint16_t crc, crc_cal = 0;
 
     if (data_len < sizeof(espnow_data_t)) {
-        ESP_LOGE(MAIN, "Receive ESPNOW data too short, len:%d", data_len);
+        ESP_LOGE(ESPNOW_TAG, "Receive ESPNOW data too short, len:%d", data_len);
         return -1;
     }
 
@@ -214,7 +219,7 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
     uint8_t * des_addr = recv_info->des_addr;
 
     if (mac_addr == NULL || data == NULL || len <= 0) {
-        ESP_LOGE(MAIN, "Receive cb arg error");
+        ESP_LOGE(ESPNOW_TAG, "Receive cb arg error");
         return;
     }
 
@@ -222,13 +227,13 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
     memcpy(recv_cb->mac_addr, mac_addr, ESP_NOW_ETH_ALEN);
     recv_cb->data = (uint8_t *)malloc(len);
     if (recv_cb->data == NULL) {
-        ESP_LOGE(MAIN, "Malloc receive data fail");
+        ESP_LOGE(ESPNOW_TAG, "Malloc receive data fail");
         return;
     }
     memcpy(recv_cb->data, data, len);
     recv_cb->data_len = len;
     if (xQueueSend(s_espnow_queue, &evt, ESPNOW_MAXDELAY) != pdTRUE) {
-        ESP_LOGW(MAIN, "Send receive queue fail");
+        ESP_LOGW(ESPNOW_TAG, "Send receive queue fail");
         free(recv_cb->data);
     }
 }
@@ -251,20 +256,20 @@ static void espnow_task(void *p)
                 free(recv_cb->data);
 
                 if (ret == ESPNOW_DATA_BROADCAST) {
-                    ESP_LOGI(MAIN, "Receive %dth broadcast data from: "MACSTR"", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+                    ESP_LOGI(ESPNOW_TAG, "Receive %dth broadcast data from: "MACSTR"", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
 
                 }
                 else if (ret == ESPNOW_DATA_UNICAST) {
-                    ESP_LOGI(MAIN, "Receive %dth unicast data from: "MACSTR", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+                    ESP_LOGI(ESPNOW_TAG, "Receive %dth unicast data from: "MACSTR", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
 
                 }
                 else {
-                    ESP_LOGI(MAIN, "Receive error data from: "MACSTR"", MAC2STR(recv_cb->mac_addr));
+                    ESP_LOGI(ESPNOW_TAG, "Receive error data from: "MACSTR"", MAC2STR(recv_cb->mac_addr));
                 }
                 break;
             }
             default:
-                ESP_LOGE(MAIN, "Callback type error: %d", evt.id);
+                ESP_LOGE(ESPNOW_TAG, "Callback type error: %d", evt.id);
                 break;
         }
     }
@@ -281,7 +286,7 @@ void espnow_init() {
 
     s_espnow_queue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(espnow_event_t));
     if (s_espnow_queue == NULL) {
-        ESP_LOGE(MAIN, "Create queue fail");
+        ESP_LOGE(ESPNOW_TAG, "Create queue fail");
         esp_now_deinit();
         return;
     }
@@ -295,11 +300,12 @@ void espnow_init() {
         .sync_interval_ms = 30000,  // Broadcast time every 30 seconds
     };
     espnow_time_initiator_start(&config);
-    ESP_LOGI(MAIN, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
+    ESP_LOGI(ESPNOW_TAG, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
 
 
     //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 }
+
 
 
 // Led
@@ -324,11 +330,73 @@ static void led_task(void *p) {
     }
 
 }
+
 void led_init() {
 
     led_strip.Init();
     xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
 }
+
+
+
+
+// InfluxDB
+void write_to_influxdb(void *pvParameters) {
+    sensor_data_t incoming_data;
+    char post_data[128];
+
+    while (1) {
+        if (xQueueReceive(influx_queue, &incoming_data, portMAX_DELAY) == pdPASS) {
+
+            snprintf(post_data, sizeof(post_data), "timestamp,host=esp32 value=%" PRId32,incoming_data.drift);
+
+            esp_http_client_config_t config = {
+                .url = INFLUX_URL,
+                .method = HTTP_METHOD_POST,
+                .timeout_ms = 5000,
+            };
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            if (client == NULL) {
+                    ESP_LOGE(INFLUX_TAG, "Failed to initialize HTTP client");
+                    return;
+            }
+
+            esp_http_client_set_header(client, "Authorization", INFLUX_TOKEN);
+            esp_http_client_set_header(client, "Content-Type", "text/plain; charset=utf-8");
+            esp_http_client_set_header(client, "Accept", "application/json");
+
+            esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+            esp_err_t err = esp_http_client_perform(client);
+            if (err == ESP_OK) {
+                int status_code = esp_http_client_get_status_code(client);
+                if (status_code == 204) {
+                    ESP_LOGI(INFLUX_TAG, "Data successfully written to InfluxDB!");
+                } else {
+                    ESP_LOGE(INFLUX_TAG, "HTTP Post failed with status code: %d", status_code);
+                }
+            } else {
+                ESP_LOGE(INFLUX_TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
+            }
+
+            esp_http_client_cleanup(client);
+        }
+    }
+}
+
+void influxDBInit() {
+    influx_queue = xQueueCreate(10, sizeof(sensor_data_t));
+    if (influx_queue == NULL) {
+        ESP_LOGE(INFLUX_TAG, "Failed to create InfluxDB queue");
+        return;
+    }
+
+    influx_queue = xQueueCreate(5, sizeof(sensor_data_t));
+
+}
+
+
 
 
 // Main
@@ -359,8 +427,10 @@ void Initialize() {
      // Init led
     led_init();
 
-}
+    // Init InfluxDB
+    influxDBInit();
 
+}
 
 
 
@@ -381,7 +451,7 @@ extern "C" void app_main()
     // Init components
     Initialize();
 
-
+  
     //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
 
     // WARNING: if program reaches end of function app_main() the MCU will restart.
