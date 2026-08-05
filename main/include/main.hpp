@@ -69,7 +69,7 @@ static const char *MOTION_TAG = "MOTION";
 static const char *WIFI_TAG = "WIFI";
 static const char *INFLUX_TAG = "INFLUX";
 static const char *ESPNOW_TAG = "ESPNOW";
-
+static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
 
 // Motion
 float _motion_data[23] = { 0.0 };

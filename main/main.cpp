@@ -164,25 +164,20 @@ static void wifi_init()
 
 
 // ESPNOW time sync
-static void timesync_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-     sensor_data_t incoming_data;
-    if (event_id == ESP_EVENT_ESPNOW_TIMESYNC_SYNCED) {
-        espnow_timesync_event_t *evt = (espnow_timesync_event_t *)event_data;
-        s_time_offset_us = evt->synced_time_us - esp_timer_get_time();
-        ESP_LOGI(ESPNOW_TAG, "Time synced from " MACSTR ", drift: %" PRId32 " ms", MAC2STR(evt->src_addr), evt->drift_ms);
-        
-        // send to influxdb queue
-        incoming_data.drift = evt->drift_ms;
-        xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
-    }
-}
-
-// Get current synchronized time
 static int64_t get_synced_time_us(void)
 {
     return esp_timer_get_time() + s_time_offset_us;
 }
+
+void espnow_timesync_init() {
+    // Start as time initiator (controller)
+    espnow_time_initiator_config_t config = {
+        .sync_interval_ms = 5000,  // Broadcast time every 5 seconds
+    };
+    espnow_time_initiator_start(&config);
+    ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
+}
+
 
 
 
@@ -256,15 +251,15 @@ static void espnow_task(void *p)
                 free(recv_cb->data);
 
                 if (ret == ESPNOW_DATA_BROADCAST) {
-                    ESP_LOGI(ESPNOW_TAG, "Receive %dth broadcast data from: "MACSTR"", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+                    ESP_LOGI(ESPNOW_TAG, "Receive %dth broadcast data from: " MACSTR "", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
 
                 }
                 else if (ret == ESPNOW_DATA_UNICAST) {
-                    ESP_LOGI(ESPNOW_TAG, "Receive %dth unicast data from: "MACSTR", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
+                    ESP_LOGI(ESPNOW_TAG, "Receive %dth unicast data from: " MACSTR ", len: %d", recv_seq, MAC2STR(recv_cb->mac_addr), recv_cb->data_len);
 
                 }
                 else {
-                    ESP_LOGI(ESPNOW_TAG, "Receive error data from: "MACSTR"", MAC2STR(recv_cb->mac_addr));
+                    ESP_LOGI(ESPNOW_TAG, "Receive error data from: " MACSTR "", MAC2STR(recv_cb->mac_addr));
                 }
                 break;
             }
@@ -295,14 +290,6 @@ void espnow_init() {
     espnow_config.qsize = CONFIG_APP_ESPNOW_QUEUE_SIZE;
     ESP_ERROR_CHECK( espnow_init(&espnow_config) );
 
-    // Start as time initiator (controller)
-    espnow_time_initiator_config_t config = {
-        .sync_interval_ms = 30000,  // Broadcast time every 30 seconds
-    };
-    espnow_time_initiator_start(&config);
-    ESP_LOGI(ESPNOW_TAG, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
-
-
     //xTaskCreate(espnow_task, "espnow_task", 2048, NULL, 4, NULL);
 }
 
@@ -322,7 +309,7 @@ static void led_task(void *p) {
         bool ledOn = phase < 5000;
         //ESP_LOGI(MAIN, "ledOn: %s", ledOn ? "true" : "false");
         if (ledOn) {
-            led_strip.LED(0,7,0);
+            led_strip.LED(0,0,7);
         } else {
             led_strip.LED(0,0,0);
         }
@@ -334,7 +321,7 @@ static void led_task(void *p) {
 void led_init() {
 
     led_strip.Init();
-    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
+    //xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
 }
 
 
@@ -348,7 +335,7 @@ void write_to_influxdb(void *pvParameters) {
     while (1) {
         if (xQueueReceive(influx_queue, &incoming_data, portMAX_DELAY) == pdPASS) {
 
-            snprintf(post_data, sizeof(post_data), "timestamp,host=esp32 value=%" PRId32,incoming_data.drift);
+            snprintf(post_data, sizeof(post_data), "espnowdrift,host=master value=%" PRId32,incoming_data.drift);
 
             esp_http_client_config_t config = {
                 .url = INFLUX_URL,
@@ -405,15 +392,18 @@ void Initialize() {
     // init arduino libraries
     initArduino();
 
-    // Setup sensors enable pins
-    SetupPins();
-
     // Serial init
     Serial.begin(115200);
     delay(1500);
 
+    // Setup sensors enable pins
+    SetupPins();
+
     // Battery init
     battery.Init();
+
+    // Init led
+    led_init();
 
     // Init BNO085 motion reports
     //Motion_Init();
@@ -424,11 +414,9 @@ void Initialize() {
     // Espnow init
     espnow_init();
 
-     // Init led
-    led_init();
+    // Espnow time sync init
+    espnow_timesync_init();
 
-    // Init InfluxDB
-    influxDBInit();
 
 }
 
