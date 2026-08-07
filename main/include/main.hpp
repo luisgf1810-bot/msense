@@ -37,8 +37,8 @@ static QueueHandle_t influx_queue = NULL;
 
 typedef struct {
     int32_t drift;
+    int64_t timestamp;
 } sensor_data_t;
-
 
 // Pins
 #define LED_PIN 19U
@@ -47,7 +47,9 @@ typedef struct {
 #define MOTION_WAKEUP_PIN 7U
 #define LIGHT_WAKEUP_PIN 5U
 
-
+// Led
+#define ON_DELAY_US  (50  * 1000) // 50 ms ON
+#define OFF_DELAY_US (5000 * 1000) // 5000 ms OFF
 
 // WiFi - cc:ba:97:f3:33:e4
 #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH

@@ -166,13 +166,13 @@ static void wifi_init()
 // ESPNOW time sync
 static int64_t get_synced_time_us(void)
 {
-    return esp_timer_get_time() + s_time_offset_us;
+    return esp_timer_get_time() ;
 }
 
 void espnow_timesync_init() {
     // Start as time initiator (controller)
     espnow_time_initiator_config_t config = {
-        .sync_interval_ms = 5000,  // Broadcast time every 5 seconds
+        .sync_interval_ms = 30000,  // Broadcast time every 30 seconds
     };
     espnow_time_initiator_start(&config);
     ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
@@ -299,7 +299,8 @@ void espnow_init() {
 static void led_task(void *p) {
 
     uint64_t meshUs = 0;
-    const TickType_t xDelay = 10 / portTICK_PERIOD_MS;
+    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
+    bool flag=true;
 
     while (true) {
 
@@ -307,21 +308,51 @@ static void led_task(void *p) {
         meshUs = get_synced_time_us();
         uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
         bool ledOn = phase < 5000;
-        //ESP_LOGI(MAIN, "ledOn: %s", ledOn ? "true" : "false");
         if (ledOn) {
-            led_strip.LED(0,0,7);
+            if (flag) {
+                ESP_LOGI(INFLUX_TAG, "ledOn: %" PRId64 "", get_synced_time_us());
+                led_strip.LED(0,0,7);
+                flag=!flag;
+            }
+            //ESP_LOGI(INFLUX_TAG, "ledOn: %s", ledOn ? "true" : "false");
+            
         } else {
-            led_strip.LED(0,0,0);
+            if (!flag) {
+                ESP_LOGI(INFLUX_TAG, "ledOff: %" PRId64 "", get_synced_time_us());
+                led_strip.LED(0,0,0);
+                flag=!flag;
+            }
         }
         vTaskDelay(xDelay);
     }
 
 }
 
+static void led_task2(void *p) {
+    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
+    sensor_data_t incoming_data;
+    incoming_data.drift = 0;
+    incoming_data.timestamp = 0;
+
+    while (1) {
+        static int64_t lastAction = 0;
+        int64_t meshus = get_synced_time_us();
+    
+        if (meshus - lastAction >= 5000000) {
+            led_strip.LED(0, 0, 7);
+            delay(80);
+            led_strip.LED(0, 0, 0);
+            lastAction = meshus;
+            ESP_LOGI(INFLUX_TAG, "Check");
+        }
+        vTaskDelay(xDelay);
+    }
+}
+
 void led_init() {
 
     led_strip.Init();
-    //xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
+    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
 }
 
 
@@ -335,7 +366,7 @@ void write_to_influxdb(void *pvParameters) {
     while (1) {
         if (xQueueReceive(influx_queue, &incoming_data, portMAX_DELAY) == pdPASS) {
 
-            snprintf(post_data, sizeof(post_data), "espnowdrift,host=master value=%" PRId32,incoming_data.drift);
+            snprintf(post_data, sizeof(post_data), "espnow,host=master drift=%" PRId32 ",timestamp=%" PRId64 "", incoming_data.drift, incoming_data.timestamp);
 
             esp_http_client_config_t config = {
                 .url = INFLUX_URL,
@@ -380,7 +411,7 @@ void influxDBInit() {
     }
 
     influx_queue = xQueueCreate(5, sizeof(sensor_data_t));
-
+    xTaskCreate(write_to_influxdb, "influx_task", 4096, NULL, 5, NULL);
 }
 
 
@@ -402,12 +433,6 @@ void Initialize() {
     // Battery init
     battery.Init();
 
-    // Init led
-    led_init();
-
-    // Init BNO085 motion reports
-    //Motion_Init();
-
     // WiFi init
     wifi_init();
 
@@ -416,6 +441,15 @@ void Initialize() {
 
     // Espnow time sync init
     espnow_timesync_init();
+
+    // Init InfluxDB
+    influxDBInit();
+
+    // Init led
+    led_init();
+
+    // Init BNO085 motion reports
+    //Motion_Init();
 
 
 }
