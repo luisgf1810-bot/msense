@@ -139,6 +139,7 @@ static void wifi_init()
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start() );
 
     ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
@@ -299,12 +300,11 @@ void espnow_init() {
 static void led_task(void *p) {
 
     uint64_t meshUs = 0;
-    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
     bool flag=true;
+    sensor_data_t incoming_data;
+    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
 
     while (true) {
-
-        // Get mesh time and create synchronized pattern
         meshUs = get_synced_time_us();
         uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
         bool ledOn = phase < 5000;
@@ -314,7 +314,6 @@ static void led_task(void *p) {
                 led_strip.LED(0,0,7);
                 flag=!flag;
             }
-            //ESP_LOGI(INFLUX_TAG, "ledOn: %s", ledOn ? "true" : "false");
             
         } else {
             if (!flag) {
@@ -328,26 +327,6 @@ static void led_task(void *p) {
 
 }
 
-static void led_task2(void *p) {
-    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
-    sensor_data_t incoming_data;
-    incoming_data.drift = 0;
-    incoming_data.timestamp = 0;
-
-    while (1) {
-        static int64_t lastAction = 0;
-        int64_t meshus = get_synced_time_us();
-    
-        if (meshus - lastAction >= 5000000) {
-            led_strip.LED(0, 0, 7);
-            delay(80);
-            led_strip.LED(0, 0, 0);
-            lastAction = meshus;
-            ESP_LOGI(INFLUX_TAG, "Check");
-        }
-        vTaskDelay(xDelay);
-    }
-}
 
 void led_init() {
 
