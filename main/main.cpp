@@ -140,6 +140,16 @@ static void wifi_init()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    uint8_t legacy_protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G;
+    esp_err_t ret = esp_wifi_set_protocol(WIFI_IF_STA, legacy_protocol);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Successfully limited Wi-Fi to 802.11b/g (Non-QoS focus)");
+    } else {
+        ESP_LOGE(TAG, "Failed to set protocol bitmap. Error: %s", esp_err_to_name(ret));
+    }
+
+
     ESP_ERROR_CHECK(esp_wifi_start() );
 
     ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
@@ -310,14 +320,17 @@ static void led_task(void *p) {
         bool ledOn = phase < 5000;
         if (ledOn) {
             if (flag) {
-                ESP_LOGI(INFLUX_TAG, "ledOn: %" PRId64 "", get_synced_time_us());
+                incoming_data.drift = s_time_offset_us / 1000; 
+                incoming_data.timestamp = get_synced_time_us();
+                xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
+                //ESP_LOGI(INFLUX_TAG, "ledOn: % " PRId64 "", get_synced_time_us());
                 led_strip.LED(0,0,7);
                 flag=!flag;
             }
             
         } else {
             if (!flag) {
-                ESP_LOGI(INFLUX_TAG, "ledOff: %" PRId64 "", get_synced_time_us());
+                //ESP_LOGI(INFLUX_TAG, "ledOff: %" PRId64 "", get_synced_time_us());
                 led_strip.LED(0,0,0);
                 flag=!flag;
             }
