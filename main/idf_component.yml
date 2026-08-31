@@ -1,5 +1,7 @@
+## IDF Component Manager Manifest File
 dependencies:
-  espressif/arduino-esp32:
-    pre_release: true
-    version: '*'
+  idf:
+    version: '>=4.1.0'
+  espressif/led_strip: ^3.0.3
   espressif/esp-now: "*"
+  rinku404/bno085: ^1.2.0

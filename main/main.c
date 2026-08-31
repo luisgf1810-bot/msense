@@ -76,6 +76,8 @@ void motion_task(void *pvParameter) {
 }
 
 
+
+
 // Wifi 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -174,6 +176,9 @@ static void wifi_init()
 }
 
 
+
+
+
 // ESPNOW time sync
 static int64_t get_synced_time_us(void)
 {
@@ -188,7 +193,6 @@ void espnow_timesync_init() {
     espnow_time_initiator_start(&config);
     ESP_LOGI(ESPNOW_TIMESYNC_TAG, "Time sync initiator started, broadcast rate: %d ms", config.sync_interval_ms);
 }
-
 
 
 
@@ -349,61 +353,79 @@ void led_init() {
 
 
 
+// IMU
 
-// InfluxDB
-void write_to_influxdb(void *pvParameters) {
-    sensor_data_t incoming_data;
-    char post_data[128];
-
-    while (1) {
-        if (xQueueReceive(influx_queue, &incoming_data, portMAX_DELAY) == pdPASS) {
-
-            snprintf(post_data, sizeof(post_data), "espnow,host=master drift=%" PRId32 ",timestamp=%" PRId64 "", incoming_data.drift, incoming_data.timestamp);
-
-            esp_http_client_config_t config = {
-                .url = INFLUX_URL,
-                .method = HTTP_METHOD_POST,
-                .timeout_ms = 5000,
-            };
-
-            esp_http_client_handle_t client = esp_http_client_init(&config);
-            if (client == NULL) {
-                    ESP_LOGE(INFLUX_TAG, "Failed to initialize HTTP client");
-                    return;
-            }
-
-            esp_http_client_set_header(client, "Authorization", INFLUX_TOKEN);
-            esp_http_client_set_header(client, "Content-Type", "text/plain; charset=utf-8");
-            esp_http_client_set_header(client, "Accept", "application/json");
-
-            esp_http_client_set_post_field(client, post_data, strlen(post_data));
-
-            esp_err_t err = esp_http_client_perform(client);
-            if (err == ESP_OK) {
-                int status_code = esp_http_client_get_status_code(client);
-                if (status_code == 204) {
-                    ESP_LOGI(INFLUX_TAG, "Data successfully written to InfluxDB!");
-                } else {
-                    ESP_LOGE(INFLUX_TAG, "HTTP Post failed with status code: %d", status_code);
-                }
-            } else {
-                ESP_LOGE(INFLUX_TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
-            }
-
-            esp_http_client_cleanup(client);
-        }
+static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
+{
+    if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
+        ESP_LOGI(MAIN_TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", esp_timer_get_time(),
+               value->data.linear_acceleration.x, value->data.linear_acceleration.y,
+               value->data.linear_acceleration.z);
     }
 }
 
-void influxDBInit() {
-    influx_queue = xQueueCreate(10, sizeof(sensor_data_t));
-    if (influx_queue == NULL) {
-        ESP_LOGE(INFLUX_TAG, "Failed to create InfluxDB queue");
-        return;
-    }
+static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+    BaseType_t high_task_awoken = pdFALSE;
+    
+    
+    // Return true if a high-priority task was awakened to trigger a context switch
+    return high_task_awoken == pdTRUE;
+}
 
-    influx_queue = xQueueCreate(5, sizeof(sensor_data_t));
-    xTaskCreate(write_to_influxdb, "influx_task", 4096, NULL, 5, NULL);
+void imu_init() {
+
+  
+    // IMU chip
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = GPIO_NUM_8,
+        .scl_io_num = GPIO_NUM_9,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
+
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x4A,  // AD0 = GND
+        .scl_speed_hz = 400000,
+    };
+    i2c_master_dev_handle_t i2c_dev;
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &i2c_dev));
+
+    ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  // NULL = default config
+    bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
+    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
+
+
+    // Sampling gtimer
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1 * 1000 * 1000, 
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    // Register the alarm callback function
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = imu_timer_alarm_cb,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+
+    // Set alarm period (1,000,000 ticks = 1 Hz sampling rate)
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = 1000000, 
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config));
+
+    // Enable and start the hardware timer
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+
 }
 
 
@@ -412,36 +434,28 @@ void influxDBInit() {
 // Main
 void Initialize() {
 
-    // init arduino libraries
-    initArduino();
-
-    // Serial init
-    Serial.begin(115200);
-    delay(1500);
-
-    // Setup sensors enable pins
+    // Init GIOs
     SetupPins();
-
-    // Battery init
-    battery.Init();
-
-    // WiFi init
-    wifi_init();
-
-    // Espnow init
-    espnow_init();
-
-    // Espnow time sync init
-    espnow_timesync_init();
-
-    // Init InfluxDB
-    influxDBInit();
+    ESP_LOGI(MAIN_TAG, "GPIO pins initialized");
 
     // Init led
     led_init();
+    ESP_LOGI(MAIN_TAG, "LED initialized"); 
 
-    // Init BNO085 motion reports
-    //Motion_Init();
+    // Battery init
+    //battery.Init();
+
+    // FLASH Log init
+    ESP_ERROR_CHECK(imu_flash_log_init());
+    ESP_LOGI(MAIN_TAG, "IMU flash initialized");
+
+    // IMU init
+    imu_init();
+    ESP_LOGI(MAIN_TAG, "BNO085 and timer initialized");
+
+    // BLE control init
+    ESP_ERROR_CHECK(ble_control_init());
+    ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
 
 }
@@ -453,20 +467,38 @@ void Initialize() {
 // App main
 extern "C" void app_main()
 {
-
-    // Initialize NVS
+     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
     // Init components
     Initialize();
 
-  
-    //ESP_LOGI(TAG, "Battery voltage read: %i", battery.BatteryVoltageRead());
+   
+    ESP_LOGI(MAIN_TAG,
+             "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
+             "and write 0x01/0x00 to the command characteristic to start/stop.");
 
-    // WARNING: if program reaches end of function app_main() the MCU will restart.
+             
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        imu_log_stats_t stats;
+        imu_flash_log_get_stats(&stats);
+
+        /*ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
+        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
+        ESP_LOGD(MAIN_TAG,
+                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
+                 " seq=%" PRIu32 " wraps=%" PRIu32
+                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
+                 stats.sectors_written, stats.next_sector, stats.total_sectors,
+                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
+                 stats.sectors_erase_failed, stats.sectors_write_failed);*/
+    }
+
 }

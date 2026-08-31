@@ -1,34 +1,32 @@
-#
-# Arduino ESP32
-#
-CONFIG_AUTOSTART_ARDUINO=n
-CONFIG_ARDUHAL_PARTITION_SCHEME_NO_OTA=y
-# end of Arduino ESP32
 
-
-# Compiler
+# Compiler Optimization for Size
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
-
-
-# Partition
-CONFIG_PARTITION_TABLE_CUSTOM=y
-
-# Serial Flash
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 
+# Disable Unused Network and Wi-Fi Features (If applicable)
+CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+CONFIG_LWIP_IPV6=n
 
-# FREERTOS
-#
-CONFIG_FREERTOS_HZ=1000
-# end of FREERTOS
-# end of Component config
+# Protocomm security
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 
-# IDF v6 requirements
-# esp-dsp and other things fail to build with picolibc
-CONFIG_LIBC_NEWLIB=y
-# required for tinyusb and some IDF components to build properly
-CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
+# Run at max core frequency to keep plenty of headroom for the 10 ms
+# sample ticOptimizek + occasional 4 KB flash erase/write.
+CONFIG_ESP32C6_DEFAULT_CPU_FREQ_160=y
 
-# Sense
-CONFIG_ESPNOW_CHANNEL=0
+# Give the esp_timer callback task (which we use as the sample tick,
+# see main.c) enough stack; it also directly touches the log buffer.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=3584
+
+# Not required, but recommended if you also use the console/log UART
+# heavily at the same time as logging -- keeps UART flushes from ever
+# stalling the timer task.
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+
+# Use our custom partition table instead of one of the stock ones
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
