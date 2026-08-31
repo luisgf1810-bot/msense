@@ -1,77 +1,65 @@
-#include <iostream>
-#include "Arduino.h"
-#include "bno085.hpp"
-#include "LedStrip.hpp"
-#include "Battery.hpp"
+#pragma once
+
+#include <stdio.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <inttypes.h>
+#include "sdkconfig.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/stream_buffer.h"
 
-#include "esp_log.h"
+
 #include "nvs_flash.h"
-#include "esp_system.h"
+#include "driver/gpio.h"
+#include "driver/gptimer.h"
+
+#include "esp_timer.h"
+#include "esp_log.h"
+#include "esp_partition.h"
+
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include "lwip/err.h"
-#include "lwip/sys.h"
-
-
 #include "esp_mac.h"
 #include "esp_now.h"
 #include "esp_crc.h"
+#include "esp_sleep.h"
+
+#include "lwip/err.h"
+#include "lwip/sys.h"
 
 #include "espnow.h"
 #include "espnow_time.h"
-#include "esp_sleep.h"
 #include "espnow_utils.h"
-#include "esp_http_client.h"
 
 
-// Influxdb
-#define TAG "INFLUX_APP"
-#define INFLUX_URL "http://192.168.68.114:8086/api/v2/write?org=sense&bucket=bucketone&precision=s"
-#define INFLUX_TOKEN "Token ySWXVH_JfYu5swtJreSMMtBSURcQQjCCEgZghhwp-cww09PhlYdUg9FvMm7pOFJPIf_Avtjk2471XSLqBl1-5Q=="
+#include "led_strip.h"
+#include "ble_control.h"
+#include "imu_flash_log.h"
+#include "bno085.h"
 
-static QueueHandle_t influx_queue = NULL;
-
-typedef struct {
-    int32_t drift;
-    int64_t timestamp;
-} sensor_data_t;
-
-// Pins
-#define LED_PIN 19U
-#define LED_ON_PIN 20U
+// IMU
+#define SECTOR_SIZE             4096UL
+// 16KB RAM buffer to absorb flash erase latency
+#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
+ // Target 1Hz tracking
+#define IMU_SAMPLING_RATE_HZ    1000                
 #define SENS_ON_PIN 18U
 #define MOTION_WAKEUP_PIN 7U
-#define LIGHT_WAKEUP_PIN 5U
 
-// Led
-#define ON_DELAY_US  (50  * 1000) // 50 ms ON
-#define OFF_DELAY_US (5000 * 1000) // 5000 ms OFF
+// 10-byte packed structural representation of one IMU reading 
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_us; 
+    int16_t accel_x;
+    int16_t accel_y;
+    int16_t accel_z;
+} imu_sample_t;
 
-// WiFi - cc:ba:97:f3:33:e4
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
-#define H2E_IDENTIFIER ""
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
-
-static EventGroupHandle_t s_wifi_event_group;
-static int s_retry_num = 0;
-
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT  BIT0
-#define WIFI_FAIL_BIT       BIT1
-#define ESPNOW_WIFI_IF      WIFI_IF_STA
-
-// Logs
-static const char *MOTION_TAG = "MOTION";
-static const char *WIFI_TAG = "WIFI";
-static const char *INFLUX_TAG = "INFLUX";
-static const char *ESPNOW_TAG = "ESPNOW";
-static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
+static StreamBufferHandle_t xImuStreamBuffer = NULL;
+static bno085_handle_t bno085;
+static gptimer_handle_t gptimer = NULL;
 
 // Motion
 float _motion_data[23] = { 0.0 };
@@ -81,19 +69,87 @@ uint8_t _i2c_write_size = 0;
 float x = 0.0;  // X-axis acceleration
 float y = 0.0;  // Y-axis acceleration
 float z = 0.0;  // Z-axis acceleration
-static int64_t start_time, end_time  = 0;  // Start time for motion reading
+static int64_t start_time, end_time  = 0;  
 
-// Motion, battery and led sensors
-static bno085 Motion;
-static Battery battery;
-static LedStrip led_strip;
+
+// LED
+// Driving exactly 1 SK6805 LED
+#define LED_SLP_PIN   20
+#define LED_PIN   19                
+#define LED_STRIP_NUM_PIXELS 1      
+
+static led_strip_handle_t led_strip;
+
+#define ON_DELAY_US  (50  * 1000)   // 50 ms ON
+#define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
+
+
+
+// WiFi -  cc:ba:97:f3:34:2c 
+#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
+#define H2E_IDENTIFIER ""
+#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
+
+static EventGroupHandle_t s_wifi_event_group;
+static int s_retry_num = 0;
+static bool s_ap_started;
+
+/* The event group allows multiple bits for each event, but we only care about two events:
+ * - we are connected to the AP with an IP
+ * - we failed to connect after the maximum amount of retries */
+#define WIFI_CONNECTED_BIT  BIT0
+#define WIFI_FAIL_BIT       BIT1
+#define ESPNOW_WIFI_IF      WIFI_IF_STA
+
+
+// Logs
+static const char *MOTION_TAG = "MOTION";
+static const char *WIFI_TAG = "WIFI";
+static const char *ESPNOW_TAG = "ESPNOW";
+static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
+static const char *LED_TAG = "LED";
+static const char *MAIN_TAG = "MAIN";
+
 
 // ESPNOW
 #define MY_RECEIVER_MAC {0xCC, 0xBA, 0x97, 0xF3, 0x33, 0xE4}
-#define ESPNOW_MAXDELAY     512
-#define ESPNOW_WIFI_IF      WIFI_IF_STA
-#define ESPNOW_QUEUE_SIZE   6
+#define ESPNOW_MAXDELAY         512
+#define ESPNOW_WIFI_IF          WIFI_IF_STA
+#define ESPNOW_QUEUE_SIZE       6
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
+
+/*
+#undef ESPNOW_INIT_CONFIG_DEFAULT
+#define ESPNOW_INIT_CONFIG_DEFAULT()             \
+    {                                            \
+        .pmk = "ESP_NOW",                        \
+        .forward_enable = 1,                     \
+        .forward_switch_channel = 0,             \
+        .sec_enable = 0,                         \
+        .reverse = 0,                            \
+        .qsize = 32,                             \
+        .send_retry_num = 10,                    \
+        .send_max_timeout = pdMS_TO_TICKS(3000), \
+        .receive_enable = {                      \
+            .ack = 1,                            \
+            .forward = 1,                        \
+            .group = 1,                          \
+            .provisoning = 0,                    \
+            .control_bind = 0,                   \
+            .control_data = 0,                   \
+            .ota_status = 0,                     \
+            .ota_data = 0,                       \
+            .debug_log = 0,                      \
+            .debug_command = 0,                  \
+            .data = 0,                           \
+            .sec_status = 0,                     \
+            .sec = 0,                            \
+            .sec_data = 0,                       \
+            .reserved = 0,                       \
+        },                                       \
+    }
+*/
+
 
 enum {
     ESPNOW_DATA_BROADCAST,
@@ -143,7 +199,7 @@ typedef struct {
     uint16_t seq_num;                     //Sequence number of ESPNOW data.
     uint16_t crc;                         //CRC16 value of ESPNOW data.
     uint32_t magic;                       //Magic number which is used to determine which device to send unicast ESPNOW data.
-    uint8_t payload[0];                   //Real payload of ESPNOW data.
+    uint8_t paylmotion_taskoad[0];                   //Real payload of ESPNOW data.
 } __attribute__((packed)) espnow_data_t;
 
 /* Parameters of sending ESPNOW data. */
@@ -162,3 +218,8 @@ typedef struct {
 
 // ESPNOW time sync
 static int64_t s_time_offset_us = 0;
+static int64_t get_synced_time_us(void);
+//static uint ledcolorr = 7;
+//static uint ledcolorb = 0;
+
+

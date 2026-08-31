@@ -81,101 +81,94 @@ void motion_task(void *pvParameter) {
 // Wifi 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < CONFIG_ESP_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(WIFI_TAG, "retry to connect to the AP");
+     if (event_id == WIFI_EVENT_FTM_REPORT) {
+        /*wifi_event_ftm_report_t *event = (wifi_event_ftm_report_t *) event_data;
+        s_rtt_est = event->rtt_est;
+        s_dist_est = event->dist_est;
+        s_ftm_report_num_entries = event->ftm_report_num_entries;
+        if (event->status == FTM_STATUS_SUCCESS) {
+            xEventGroupSetBits(s_ftm_event_group, FTM_REPORT_BIT);
+        } else if (event->status == FTM_STATUS_USER_TERM) {
+            ESP_LOGI(TAG_STA, "User terminated FTM procedure");
         } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-        }
-        ESP_LOGI(WIFI_TAG, "connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            ESP_LOGI(TAG_STA, "FTM procedure with Peer("MACSTR") failed! (Status - %d)",
+                     MAC2STR(event->peer_mac), event->status);
+            xEventGroupSetBits(s_ftm_event_group, FTM_FAILURE_BIT);
+        }*/
+    } else if (event_id == WIFI_EVENT_AP_START) {
+        s_ap_started = true;
+    } else if (event_id == WIFI_EVENT_AP_STOP) {
+        s_ap_started = false;
     }
 }
 
 static void wifi_init()
 {
     s_wifi_event_group = xEventGroupCreate();
-
     ESP_ERROR_CHECK(esp_netif_init());
-
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &event_handler,
                                                         NULL,
                                                         &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
 
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = CONFIG_ESP_WIFI_SSID,
             .password = CONFIG_ESP_WIFI_PASSWORD,
-            /* Authmode threshold resets to WPA2 as default if auth mode threshold equals WIFI_AUTH_OPEN
-             * and password matches WPA2 standards (password len => 8).
-             * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
-             * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
-             * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
-             */
-            .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
-            .sae_h2e_identifier = H2E_IDENTIFIER,
+            .channel       = 1,
+            .max_connection = 4,
+            .authmode      = WIFI_AUTH_WPA2_PSK,
+            .ftm_responder = true,  
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
+
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP) );
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    uint8_t legacy_protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G;
-    esp_err_t ret = esp_wifi_set_protocol(WIFI_IF_STA, legacy_protocol);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Successfully limited Wi-Fi to 802.11b/g (Non-QoS focus)");
-    } else {
-        ESP_LOGE(TAG, "Failed to set protocol bitmap. Error: %s", esp_err_to_name(ret));
-    }
-
-
     ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
+    /* Keep the AP on 20 MHz bandwidth - Espressif's own FTM example notes
+     * this gives measurably more accurate FTM timing than 40 MHz. */
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW20);
 
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(WIFI_TAG, "connected to ap SSID:%s password:%s",  CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID:%s, password:%s", CONFIG_ESP_WIFI_SSID, CONFIG_ESP_WIFI_PASSWORD);
-    } else {
-        ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
-    }
+    ESP_LOGI(TAG, "SoftAP '%s' up on channel 1, FTM responder enabled", CONFIG_ESP_WIFI_SSID);
 }
 
+static void gptimer_init_from_tsf(void)
+{
+    /* Seed the GPTimer from this radio's own TSF, then let it free-run. */
+    gptimer_config_t timer_cfg = {
+        .clk_src      = GPTIMER_CLK_SRC_DEFAULT,
+        .direction    = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000,   /* 1 tick = 1 us */
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_cfg, &s_gptimer));
 
+    gptimer_event_callbacks_t cbs = { .on_alarm = on_gptimer_alarm };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer, &cbs, NULL));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer));
+
+    int64_t tsf_now = esp_wifi_get_tsf_time(WIFI_IF_AP);
+    ESP_ERROR_CHECK(gptimer_set_raw_count(s_gptimer, (uint64_t)tsf_now));
+
+    uint64_t first_target = (((uint64_t)tsf_now / BLINK_PERIOD_US) + 1) * BLINK_PERIOD_US;
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = first_target,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer, &alarm_cfg));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer));
+
+    ESP_LOGI(TAG, "GPTimer seeded from AP TSF=%lld us, first blink at %llu us",
+             (long long)tsf_now, (unsigned long long)first_target);
+}
 
 
 
@@ -457,7 +450,9 @@ void Initialize() {
     ESP_ERROR_CHECK(ble_control_init());
     ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
-
+    // init Wifi and hw timer from FTM
+    wifi_init();
+    gptimer_init_from_tsf();
 }
 
 
