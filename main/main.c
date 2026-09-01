@@ -1,7 +1,6 @@
 #include "main.h"
 
 
-
 // Setup functions
 void SetupPins() {
 
@@ -12,10 +11,7 @@ void SetupPins() {
 }
 
 
-
 // Led
-
-
 static bool IRAM_ATTR on_gptimer_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
     BaseType_t hp_task_woken = pdFALSE;
@@ -97,20 +93,17 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
     }
 }
 
-static void wifi_init()
+static void wifi_init_softap()
 {
-    s_wifi_event_group = xEventGroupCreate();
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_ap();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_ap();
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    esp_event_handler_instance_t instance_any_id;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
 
     wifi_config_t ap_config = {
         .ap = {
@@ -124,16 +117,15 @@ static void wifi_init()
         },
     };
 
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 
     /* Keep the AP on 20 MHz bandwidth - Espressif's own FTM example notes
      * this gives measurably more accurate FTM timing than 40 MHz. */
     esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW20);
 
-    ESP_LOGI(TAG, "SoftAP '%s' up on channel 1, FTM responder enabled", CONFIG_ESP_WIFI_SSID);
+    ESP_LOGI(TAG, "SoftAP '%s' up on channel %d, FTM responder enabled", WIFI_SSID, WIFI_CHANNEL);
 }
 
 static void gptimer_init_from_tsf(void)
@@ -274,14 +266,14 @@ static void espnow_task(void *p)
     }
 }
 
-void espnow_deinit(espnow_send_param_t *send_param)
+void espnow_close(espnow_send_param_t *send_param)
 {
     vQueueDelete(s_espnow_queue);
     s_espnow_queue = NULL;
     esp_now_deinit();
 }
 
-void espnow_init() {
+void espnow_start() {
 
     s_espnow_queue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(espnow_event_t));
     if (s_espnow_queue == NULL) {
@@ -299,51 +291,8 @@ void espnow_init() {
 
 
 
-// Led
-static void led_task(void *p) {
-
-    uint64_t meshUs = 0;
-    bool flag=true;
-    sensor_data_t incoming_data;
-    const TickType_t xDelay = 5 / portTICK_PERIOD_MS;
-
-    while (true) {
-        meshUs = get_synced_time_us();
-        uint32_t phase = (meshUs / 1000) % 10000;  // 0-999ms cycle
-        bool ledOn = phase < 5000;
-        if (ledOn) {
-            if (flag) {
-                incoming_data.drift = s_time_offset_us / 1000; 
-                incoming_data.timestamp = get_synced_time_us();
-                xQueueSend(influx_queue, &incoming_data, pdMS_TO_TICKS(10));
-                //ESP_LOGI(INFLUX_TAG, "ledOn: % " PRId64 "", get_synced_time_us());
-                led_strip.LED(0,0,7);
-                flag=!flag;
-            }
-            
-        } else {
-            if (!flag) {
-                //ESP_LOGI(INFLUX_TAG, "ledOff: %" PRId64 "", get_synced_time_us());
-                led_strip.LED(0,0,0);
-                flag=!flag;
-            }
-        }
-        vTaskDelay(xDelay);
-    }
-
-}
-
-
-void led_init() {
-
-    led_strip.Init();
-    xTaskCreate(led_task, "led_task", 2048, NULL, 4, NULL);
-}
-
-
 
 // IMU
-
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
     if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
@@ -446,9 +395,9 @@ void Initialize() {
     ESP_ERROR_CHECK(ble_control_init());
     ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
-    // init Wifi and hw timer from FTM
-    wifi_init();
-    gptimer_init_from_tsf();
+    // Wifi and hw timer from FTM
+    wifi_init_softap();
+    //gptimer_init_from_tsf();
 }
 
 
@@ -456,7 +405,7 @@ void Initialize() {
 
 
 // App main
-extern "C" void app_main()
+void app_main()
 {
      // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -465,6 +414,8 @@ extern "C" void app_main()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
 
     // Init components
     Initialize();
@@ -493,3 +444,6 @@ extern "C" void app_main()
     }
 
 }
+
+
+
