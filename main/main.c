@@ -1,80 +1,75 @@
-#include "main.hpp"
+#include "main.h"
 
 
 
 // Setup functions
 void SetupPins() {
 
-    pinMode(LED_ON_PIN, OUTPUT);    /*Set LED transistor pin as output*/
-    digitalWrite(LED_ON_PIN, HIGH); /*Init Set up to output high*/
-    pinMode(SENS_ON_PIN, OUTPUT); /*Set LDO enable pin as output*/
-    gpio_hold_dis((gpio_num_t)SENS_ON_PIN);
-    digitalWrite(SENS_ON_PIN, HIGH); /*Init Set up to output high*/
-    pinMode(LIGHT_WAKEUP_PIN, INPUT);   // Assumes active-low button
-    pinMode(MOTION_WAKEUP_PIN, INPUT);  // Assumes active-low button
+    // Enable the power supply to the LED Strip 
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
 
 }
 
 
-// Motion sensor functions
-void Motion_Init() {
 
-    Wire.begin(8, 9, 400000);  // SDA on GPIO8, SCL on GPIO9, 400kHz speed
-    if (Motion.begin() == false) {
-        ESP_LOGI(MOTION_TAG, ">> Error: Motion Sensor not found - Check Hardware");
-    }
-    if (Motion.isConnected() == false) {
-        ESP_LOGI(MOTION_TAG, ">> Error: Motion Sensor not found");
-    }
-    if (Motion.enableLinearAccelerometer() == true) {
-        ESP_LOGI(MOTION_TAG, "Linear Accelerometer Activated  ");
-        } else {
-        ESP_LOGI(MOTION_TAG, "Linear Accelerometer Motion: Failed  ");
-    }
+// Led
 
-    _i2c_write_size = 0;
+
+static bool IRAM_ATTR on_gptimer_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
+{
+    BaseType_t hp_task_woken = pdFALSE;
+
+    uint64_t next_target = edata->alarm_value + BLINK_PERIOD_US;
+    gptimer_alarm_config_t alarm_cfg = {
+        .alarm_count = next_target,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = false,
+    };
+    /* Re-arming a manual-reload alarm from inside its own callback is the
+     * documented ESP-IDF gptimer pattern for "one-shot, re-armed each time". */
+    gptimer_set_alarm_action(timer, &alarm_cfg);
+
+    uint64_t tick = edata->alarm_value;
+    xQueueSendFromISR(s_blink_evt_q, &tick, &hp_task_woken);
+    return hp_task_woken == pdTRUE;
 }
 
-void Motion_Read() {
-    bool error_flag = 1;
-    uint8_t motion_id = 0xFF;
- 
-    while (Motion.getSensorEvent() == true) {
-        motion_id = Motion.getSensorEventID();
-        //ESP_LOGI(MAIN, "Sensror Event ID: %i", motion_id);
+void led_init() {
 
-        if (motion_id == SENSOR_REPORTID_LINEAR_ACCELERATION) {
-                _motion_data[20] = Motion.getLinAccelX();
-                _motion_data[21] = Motion.getLinAccelY();
-                _motion_data[22] = Motion.getLinAccelZ();
-                error_flag = 0;
-                break;
+    /* Enable the power supply to the LED Strip */
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
+
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_GPIO,
+        .max_leds = LED_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
+    led_strip_clear(s_led);
+}
+
+static void blink_task(void *arg)
+{
+    uint64_t tick;
+    for (;;) {
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "blink @ t=%llu us (reference clock)", (unsigned long long)tick);
+            led_strip_set_pixel(s_led, 0, 0, 40, 0);   /* green flash */
+            led_strip_refresh(s_led);
+            vTaskDelay(pdMS_TO_TICKS(BLINK_FLASH_MS));
+            led_strip_clear(s_led);
         }
-
-        if (error_flag) {
-            ESP_LOGI(MOTION_TAG, ">> Error: Motion Sensor not found");
-        }
     }
 }
-
-void motion_task(void *pvParameter) {
-    LedStrip led_strip;
-
-    led_strip.Init();
-
-    while(1) {
-        led_strip.LED(0, LED_DEFAULT_BRIGHTNESS, 0);
-
-        start_time = esp_timer_get_time();
-        Motion_Read();
-        end_time = esp_timer_get_time();
-        //ESP_LOGI(MOTION_TAG, "Acc XYZ: %.2f, %.2f, %.2f m/s^2 ", _motion_data[20], _motion_data[21], _motion_data[22]);
-        //ESP_LOGI(MOTION_TAG, "Motion read time: %lldus", end_time - start_time);
-        led_strip.LED(0, 0, 0);
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // Wait 1 second
-    }
-}
-
 
 
 
@@ -117,20 +112,21 @@ static void wifi_init()
                                                         NULL,
                                                         &instance_any_id));
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-            .channel       = 1,
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid          = WIFI_SSID,
+            .ssid_len      = strlen(WIFI_SSID),
+            .channel       = WIFI_CHANNEL,
+            .password      = WIFI_PASS,
             .max_connection = 4,
             .authmode      = WIFI_AUTH_WPA2_PSK,
-            .ftm_responder = true,  
+            .ftm_responder = true,      /* <-- serves FTM requests, esp_wifi_types_generic.h */
         },
     };
 
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
     /* Keep the AP on 20 MHz bandwidth - Espressif's own FTM example notes
