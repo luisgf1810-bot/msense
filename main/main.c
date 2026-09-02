@@ -151,8 +151,7 @@ static void gptimer_init_from_tsf(void)
     ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer, &alarm_cfg));
     ESP_ERROR_CHECK(gptimer_start(s_gptimer));
 
-    ESP_LOGI(TAG, "GPTimer seeded from AP TSF=%lld us, first blink at %llu us",
-             (long long)tsf_now, (unsigned long long)first_target);
+    ESP_LOGI(MAIN_TAG, "GPTimer seeded from AP TSF=%lld us", (long long)tsf_now);
 }
 
 
@@ -394,7 +393,7 @@ void Initialize() {
 
     // Wifi and hw timer from FTM
     wifi_init_softap();
-    //gptimer_init_from_tsf();
+    gptimer_init_from_tsf();
 }
 
 
