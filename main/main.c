@@ -1,9 +1,8 @@
 #include "main.h"
 
 
-// Setup functions
+// Setup GPIOs
 void SetupPins() {
-
     // Enable the power supply to the LED Strip 
     gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_SLP_PIN, 1);
@@ -11,7 +10,35 @@ void SetupPins() {
 }
 
 
+
+
 // Led
+void led_init() {
+
+    /* Enable the power supply to the LED Strip */
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
+
+    led_rcolor = 7;
+    led_gcolor = 0;
+
+
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_PIN,
+        .max_leds = LED_STRIP_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
+    led_strip_clear(s_led);
+}
+
 static bool IRAM_ATTR on_gptimer_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
     BaseType_t hp_task_woken = pdFALSE;
@@ -31,35 +58,13 @@ static bool IRAM_ATTR on_gptimer_alarm(gptimer_handle_t timer, const gptimer_ala
     return hp_task_woken == pdTRUE;
 }
 
-void led_init() {
-
-    /* Enable the power supply to the LED Strip */
-    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_SLP_PIN, 1);
-
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_GPIO,
-        .max_leds = LED_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src       = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000,
-        .flags.with_dma = false,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
-    led_strip_clear(s_led);
-}
-
 static void blink_task(void *arg)
 {
     uint64_t tick;
     for (;;) {
         if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "blink @ t=%llu us (reference clock)", (unsigned long long)tick);
-            led_strip_set_pixel(s_led, 0, 0, 40, 0);   /* green flash */
+            led_strip_set_pixel(s_led, 0, led_rcolor, led_gcolor, 0);   /* green flash */
             led_strip_refresh(s_led);
             vTaskDelay(pdMS_TO_TICKS(BLINK_FLASH_MS));
             led_strip_clear(s_led);
@@ -93,7 +98,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
     }
 }
 
-static void wifi_init_softap()
+static void wifi_softap_init()
 {
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -307,8 +312,6 @@ static bool imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event
 }
 
 void imu_init() {
-
-  
     // IMU chip
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
@@ -372,11 +375,7 @@ void Initialize() {
     SetupPins();
     ESP_LOGI(MAIN_TAG, "GPIO pins initialized");
 
-    // Init led
-    led_init();
-    ESP_LOGI(MAIN_TAG, "LED initialized"); 
-
-    // Battery init
+      // Battery init
     //battery.Init();
 
     // FLASH Log init
@@ -392,10 +391,13 @@ void Initialize() {
     ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
     // Wifi and hw timer from FTM
-    wifi_init_softap();
+    wifi_softap_iInitialize();nit();
     gptimer_init_from_tsf();
-}
 
+    // Init led
+    led_init();
+    ESP_LOGI(MAIN_TAG, "LED initialized"); 
+}
 
 
 
@@ -416,28 +418,7 @@ void app_main()
     // Init components
     Initialize();
 
-   
-    ESP_LOGI(MAIN_TAG,
-             "Ready. Logging is OFF -- connect to \"ESP32C6-IMULOG\" over BLE "
-             "and write 0x01/0x00 to the command characteristic to start/stop.");
-
-             
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-
-        imu_log_stats_t stats;
-        imu_flash_log_get_stats(&stats);
-
-        /*ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0, 0, 255, 0));
-        ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        ESP_LOGD(MAIN_TAG,
-                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
-                 " seq=%" PRIu32 " wraps=%" PRIu32
-                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
-                 stats.sectors_written, stats.next_sector, stats.total_sectors,
-                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
-                 stats.sectors_erase_failed, stats.sectors_write_failed);*/
-    }
+    xTaskCreate(blink_task, "blink_task", 4096, NULL, 10, NULL);  
 
 }
 

@@ -76,23 +76,19 @@ static int64_t start_time, end_time  = 0;
 // LED
 // Driving exactly 1 SK6805 LED
 #define LED_SLP_PIN   20
-#define LED_GPIO   19                
-#define LED_NUM_PIXELS 1      
-
+#define LED_PIN   19                
+#define LED_STRIP_NUM_PIXELS 1      
 #define BLINK_PERIOD_US 3000000ULL   /* 3 seconds, in GPTimer ticks (1 tick = 1 us) */
 #define BLINK_FLASH_MS  150          /* visible on-time of the flash              */
-static led_strip_handle_t led_strip;
-
 #define ON_DELAY_US  (50  * 1000)   // 50 ms ON
 #define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
 
+static led_strip_handle_t led_strip;
+static uint led_rcolor = 0;
+static uint led_gcolor = 0;
 
 
-// WiFi -  cc:ba:97:f3:34:2c 
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
-#define H2E_IDENTIFIER ""
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
-
+// WiFi 
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 static bool s_ap_started;
@@ -100,16 +96,12 @@ static gptimer_handle_t   s_gptimer      = NULL;
 static QueueHandle_t      s_blink_evt_q  = NULL;
 static led_strip_handle_t s_led          = NULL;
 
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
 #define ESPNOW_WIFI_IF      WIFI_IF_STA
-
-#define WIFI_SSID       "ESP32_FTM_MASTER"
-#define WIFI_PASS       "ftmsync123"
-#define WIFI_CHANNEL    6
+#define WIFI_SSID           "ESP32_FTM_MASTER"
+#define WIFI_PASS           "ftmsync123"
+#define WIFI_CHANNEL        6
 
 
 
