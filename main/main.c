@@ -391,7 +391,7 @@ void Initialize() {
     ESP_LOGI(MAIN_TAG, "BLE control initialized");
 
     // Wifi and hw timer from FTM
-    wifi_softap_iInitialize();nit();
+    wifi_softap_init();
     gptimer_init_from_tsf();
 
     // Init led
