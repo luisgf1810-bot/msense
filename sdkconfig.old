@@ -721,7 +721,7 @@ CONFIG_IDF_TARGET_ARCH="riscv"
 # default:
 CONFIG_IDF_TARGET="esp32c6"
 # default:
-CONFIG_IDF_INIT_VERSION="6.0.2"
+CONFIG_IDF_INIT_VERSION="$IDF_INIT_VERSION"
 # default:
 CONFIG_IDF_TARGET_ESP32C6=y
 # default:
@@ -1046,30 +1046,6 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # Sense Configuration
 #
-# default:
-CONFIG_RETRY_NUM=5
-# default:
-CONFIG_ESP_WIFI_SSID="Rocky211"
-# default:
-CONFIG_ESP_WIFI_PASSWORD="raspberry"
-# default:
-CONFIG_ESP_MAXIMUM_RETRY=5
-# default:
-CONFIG_ESPNOW_PMK="pmk1234567890123"
-# default:
-CONFIG_ESPNOW_LMK="lmk1234567890123"
-CONFIG_ESPNOW_CHANNEL=0
-# default:
-CONFIG_ESPNOW_SEND_COUNT=100
-# default:
-CONFIG_ESPNOW_SEND_DELAY=1000
-# default:
-CONFIG_ESPNOW_SEND_LEN=10
-# default:
-# CONFIG_ESPNOW_ENABLE_LONG_RANGE is not set
-# default:
-CONFIG_APP_ESPNOW_QUEUE_SIZE=32
-# end of Sense Configuration
 
 #
 # Compiler options
@@ -1147,18 +1123,6 @@ CONFIG_COMPILER_CXX_GLIBCXX_CONSTEXPR_NO_CHANGE=y
 
 #
 # Component config
-#
-
-#
-# !!! MINIMAL_BUILD is enabled !!!
-#
-
-#
-# Only common components and those transitively required by the main component are listed
-#
-
-#
-# If a component configuration is missing, please add it to the main component's requirements
 #
 
 #
@@ -2598,9 +2562,7 @@ CONFIG_ESP_WIFI_BSS_MAX_IDLE_SUPPORT=y
 CONFIG_ESP_WIFI_SLP_DEFAULT_MAX_ACTIVE_TIME=10
 # default:
 CONFIG_ESP_WIFI_SLP_DEFAULT_WAIT_BROADCAST_DATA_TIME=15
-CONFIG_ESP_WIFI_FTM_ENABLE=y
-CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT=y
-CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT=y
+# CONFIG_ESP_WIFI_FTM_ENABLE is not set
 # default:
 CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=y
 # default:
@@ -3223,10 +3185,7 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=1
 # CONFIG_LWIP_DHCP_GET_NTP_SRV is not set
 # default:
 CONFIG_LWIP_SNTP_UPDATE_DELAY=3600000
-# default:
-CONFIG_LWIP_SNTP_STARTUP_DELAY=y
-# default:
-CONFIG_LWIP_SNTP_MAXIMUM_STARTUP_DELAY=5000
+# CONFIG_LWIP_SNTP_STARTUP_DELAY is not set
 # end of SNTP
 
 #
@@ -3935,18 +3894,7 @@ CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
 #
 # ESP-NOW Security Configuration
 #
-# default:
-CONFIG_ESPNOW_APP_SECURITY=y
-# default:
-# CONFIG_ESPNOW_ALL_SECURITY is not set
-# default:
-# CONFIG_ESPNOW_CONTROL_SECURITY is not set
-# default:
-# CONFIG_ESPNOW_DEBUG_SECURITY is not set
-# default:
-# CONFIG_ESPNOW_OTA_SECURITY is not set
-# default:
-# CONFIG_ESPNOW_PROV_SECURITY is not set
+# CONFIG_ESPNOW_APP_SECURITY is not set
 # end of ESP-NOW Security Configuration
 
 #
