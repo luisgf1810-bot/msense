@@ -82,11 +82,14 @@ static int64_t start_time, end_time  = 0;
 #define BLINK_FLASH_MS  150          /* visible on-time of the flash              */
 #define ON_DELAY_US  (50  * 1000)   // 50 ms ON
 #define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
+#define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
+#define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 
 static gptimer_handle_t     s_gptimer_led  = NULL;
 static QueueHandle_t        s_blink_evt_q  = NULL;
 static led_strip_handle_t   s_led          = NULL;
-
+static bool                 led_state = false;
+static volatile bool        s_timer_started = false;
 
 
 
