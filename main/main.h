@@ -41,6 +41,12 @@
 #include "imu_flash_log.h"
 #include "bno085.h"
 
+
+
+// Logs
+static const char *MAIN_TAG = "MAIN";
+
+
 // IMU
 #define SECTOR_SIZE             4096UL
 // 16KB RAM buffer to absorb flash erase latency
@@ -93,11 +99,6 @@ static volatile bool        s_timer_started = false;
 
 
 
-// Logs
-static const char *MOTION_TAG = "MOTION";
-static const char *ESPNOW_TIMESYNC_TAG = "ESPNOW_TIMESYNC";
-static const char *LED_TAG = "LED";
-static const char *MAIN_TAG = "MAIN";
 
 
 

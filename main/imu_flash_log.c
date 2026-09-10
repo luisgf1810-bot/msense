@@ -261,7 +261,7 @@ static void sample_timer_cb(void *arg)
 /* Public API                                                            */
 /* -------------------------------------------------------------------- */
 
-esp_err_t imu_flash_log_init(void)
+esp_err_t flashlog_init(void)
 {
     s_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, IMU_LOG_PARTITION_LABEL);
     if (!s_partition) {
@@ -303,8 +303,8 @@ esp_err_t imu_flash_log_init(void)
         .name = "imu_sample_tick",
         .skip_unhandled_events = true,
     };
-    return esp_timer_create(&timer_args, &s_sample_timer);
-    //return ESP_OK;
+    esp_timer_create(&timer_args, &s_sample_timer);
+    return ESP_OK;
 }
 
 esp_err_t imu_flash_log_start(void)

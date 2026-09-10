@@ -59,7 +59,7 @@ typedef struct {
 
 /* One-time setup: finds the partition, scans it for a resume point,
  * creates the writer task + queue. Does NOT start sampling yet. */
-esp_err_t imu_flash_log_init(void);
+esp_err_t flashlog_init(void);
 
 /* Starts the 10 ms esp_timer that feeds the logger. */
 esp_err_t imu_flash_log_start(void);
