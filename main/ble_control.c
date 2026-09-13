@@ -24,7 +24,7 @@ static void do_start(void)
     if (!s_logging_active) {
         if (imu_flash_log_start() == ESP_OK) {
             s_logging_active = true;
-            ESP_LOGI(TAG, "logging started (BLE command)");
+            ESP_LOGI(BLETAG, "logging started (BLE command)");
         }
     }
     notify_status();
@@ -35,7 +35,7 @@ static void do_stop(void)
     if (s_logging_active) {
         imu_flash_log_stop();
         s_logging_active = false;
-        ESP_LOGI(TAG, "logging stopped (BLE command)");
+        ESP_LOGI(BLETAG, "logging stopped (BLE command)");
     }
     notify_status();
 }
@@ -66,7 +66,7 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
             do_stop();
             break;
         default:
-            ESP_LOGW(TAG, "unknown command byte 0x%02x", data[0]);
+            ESP_LOGW(BLETAG, "unknown command byte 0x%02x", data[0]);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     }
     return 0;
@@ -138,25 +138,25 @@ static void start_advertising(void)
     /* Make sure we have proper BT identity address set (random preferred) */
     rc = ble_hs_util_ensure_addr(0);
     if (rc != 0) {
-        ESP_LOGE(TAG, "device does not have any available bt address!");
+        ESP_LOGE(BLETAG, "device does not have any available bt address!");
         return;
     }
 
     /* Figure out BT address to use while advertising (no privacy for now) */
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
     if (rc != 0) {
-        ESP_LOGE(TAG, "failed to infer address type, error code: %d", rc);
+        ESP_LOGE(BLETAG, "failed to infer address type, error code: %d", rc);
         return;
     }
 
     /* Printing ADDR */
     rc = ble_hs_id_copy_addr(own_addr_type, addr_val, NULL);
     if (rc != 0) {
-        ESP_LOGE(TAG, "failed to copy device address, error code: %d", rc);
+        ESP_LOGE(BLETAG, "failed to copy device address, error code: %d", rc);
         return;
     }
     format_addr(addr_str, addr_val);
-    ESP_LOGI(TAG, "device address: %s", addr_str);
+    ESP_LOGI(BLETAG, "device address: %s", addr_str);
 
 
 
@@ -185,7 +185,7 @@ static void start_advertising(void)
     /* Set advertisement fields */
     rc = ble_gap_adv_set_fields(&adv_fields);
     if (rc != 0) {
-        ESP_LOGE(TAG, "failed to set advertising data, error code: %d", rc);
+        ESP_LOGE(BLETAG, "failed to set advertising data, error code: %d", rc);
         return;
     }
 
@@ -201,7 +201,7 @@ static void start_advertising(void)
     /* Set scan response fields */
     rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
     if (rc != 0) {
-        ESP_LOGE(TAG, "failed to set scan response data, error code: %d", rc);
+        ESP_LOGE(BLETAG, "failed to set scan response data, error code: %d", rc);
         return;
     }
 
@@ -216,17 +216,17 @@ static void start_advertising(void)
     /* Start advertising */
     rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &adv_params,  gap_event_handler, NULL);
     if (rc != 0) {
-        ESP_LOGE(TAG, "failed to start advertising, error code: %d", rc);
+        ESP_LOGE(BLETAG, "failed to start advertising, error code: %d", rc);
         return;
     }
-    ESP_LOGI(TAG, "advertising started!");
+    ESP_LOGI(BLETAG, "advertising started!");
 }
 
 static int gap_event_handler(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
-            ESP_LOGI(TAG, "connect %s", event->connect.status == 0 ? "established" : "failed");
+            ESP_LOGI(BLETAG, "connect %s", event->connect.status == 0 ? "established" : "failed");
             if (event->connect.status == 0) {
                 s_conn_handle = event->connect.conn_handle;
             } else {
@@ -235,7 +235,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             break;
 
         case BLE_GAP_EVENT_DISCONNECT:
-            ESP_LOGI(TAG, "disconnected, reason=%d", event->disconnect.reason);
+            ESP_LOGI(BLETAG, "disconnected, reason=%d", event->disconnect.reason);
             s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             start_advertising();
             break;
@@ -245,7 +245,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             break;
 
         case BLE_GAP_EVENT_SUBSCRIBE:
-            ESP_LOGI(TAG, "subscribe: attr=%d notify=%d",
+            ESP_LOGI(BLETAG, "subscribe: attr=%d notify=%d",
                       event->subscribe.attr_handle, event->subscribe.cur_notify);
             break;
 
@@ -259,16 +259,16 @@ static void on_sync(void)
 {
     int rc = ble_hs_id_infer_auto(0, &own_addr_type);
     if (rc != 0) {
-        ESP_LOGE(TAG, "ble_hs_id_infer_auto failed rc=%d", rc);
+        ESP_LOGE(BLETAG, "ble_hs_id_infer_auto failed rc=%d", rc);
         return;
     }
-    ESP_LOGI(TAG, "BLE stack synced, advertising as \"%s\"", DEVICE_NAME);
+    ESP_LOGI(BLETAG, "BLE stack synced, advertising as \"%s\"", DEVICE_NAME);
     start_advertising();
 }
 
 static void on_reset(int reason)
 {
-    ESP_LOGW(TAG, "BLE host reset, reason=%d", reason);
+    ESP_LOGW(BLETAG, "BLE host reset, reason=%d", reason);
 }
 
 static void host_task(void *param)
@@ -336,6 +336,6 @@ void ble_store_config_init(void)            ;
     // Nimble freertos stack initialization
     nimble_port_freertos_init(host_task);
 
-    ESP_LOGI(TAG, "BLE control ready");
+    ESP_LOGI(BLETAG, "BLE control ready");
     return ESP_OK;
 }

@@ -44,7 +44,7 @@
 
 
 // Logs
-static const char *MAIN_TAG = "MAIN";
+static const char *TAG = "MAIN";
 
 
 // IMU
@@ -80,25 +80,59 @@ static int64_t start_time, end_time  = 0;
 
 
 // LED
-// Driving exactly 1 SK6805 LED
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
 #define LED_STRIP_NUM_PIXELS 1      
-#define BLINK_PERIOD_US 3000000ULL   /* 3 seconds, in GPTimer ticks (1 tick = 1 us) */
-#define BLINK_FLASH_MS  150          /* visible on-time of the flash              */
-#define ON_DELAY_US  (50  * 1000)   // 50 ms ON
-#define OFF_DELAY_US (5000 * 1000)  // 5000 ms OFF
 #define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
 #define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 
+static TaskHandle_t         s_ledtask      = NULL;
 static gptimer_handle_t     s_gptimer_led  = NULL;
 static QueueHandle_t        s_blink_evt_q  = NULL;
 static led_strip_handle_t   s_led          = NULL;
-static bool                 led_state = false;
 static volatile bool        s_timer_started = false;
+static uint                 rcolor=7;
+static uint                 gcolor=0;
+static uint                 ondelay=80;
+static uint64_t             period=3000000;
 
 
+// ESPNOW
+
+static uint8_t s_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 
+typedef enum {
+    EXAMPLE_ESPNOW_SEND_CB,
+    EXAMPLE_ESPNOW_RECV_CB,
+} espnow_event_id_t;
+
+typedef struct {
+    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
+    esp_now_send_status_t status;
+} espnow_event_send_cb_t;
+
+typedef struct {
+    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
+    uint8_t *data;
+    int data_len;
+} espnow_event_recv_cb_t;
+
+typedef union {
+    espnow_event_send_cb_t send_cb;
+    espnow_event_recv_cb_t recv_cb;
+} espnow_event_info_t;
+
+/* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */
+typedef struct {
+    espnow_event_id_t id;
+    espnow_event_info_t info;
+} espnow_event_t;
+
+enum {
+    EXAMPLE_ESPNOW_DATA_BROADCAST,
+    EXAMPLE_ESPNOW_DATA_UNICAST,
+    EXAMPLE_ESPNOW_DATA_MAX,
+};
 
 

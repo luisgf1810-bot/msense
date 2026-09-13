@@ -51,7 +51,7 @@ extern "C" {
 #define DEVICE_NAME "ESP32C6-IMULOG"
 
 
-static const char *TAG = "ble_control";
+static const char *BLETAG = "ble_control";
 
 /* ---- command byte values written to the Command characteristic ------- */
 typedef enum {
