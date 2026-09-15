@@ -3,6 +3,20 @@
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 
+/* Compute the number of ticks from "now" (phase_reference_us) to the
+ * next BLINKER_PERIOD_US-aligned boundary, guaranteed to be >=
+ * BLINKER_MIN_SCHEDULE_AHEAD_US. */
+static uint64_t ticks_to_next_boundary(uint64_t phase_now)
+{
+    uint64_t delay = period - (phase_now % period);
+    if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
+        delay += period;
+    }
+    return delay;
+}
+
+
+
 
 
 /* --- GPTimer Init and ISR Callback --- */
@@ -10,14 +24,6 @@ static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer,   const gptimer
     
     BaseType_t high_task_wakeup = pdFALSE;
     
-    uint64_t next_alarm = edata->count_value + period; 
-
-    gptimer_alarm_config_t config = {
-        .alarm_count = next_alarm,
-        .flags.auto_reload_on_alarm = false,
-    };
-    gptimer_set_alarm_action(timer, &config);
-
     uint8_t evt = 1;
     xQueueSendFromISR(s_blink_evt_q, &evt, &high_task_wakeup);
     return high_task_wakeup == pdTRUE;
@@ -31,7 +37,41 @@ static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_a
     return high_task_awoken == pdTRUE;
 }
 
-esp_err_t init_gptimer() {
+void blinker_led_apply(uint64_t phase_now)
+{
+    if (!s_led_strip) {
+        return;
+    }
+
+    /* THE key line: LED state is a pure function of the shared clock,
+     * never of our own previous state. Both boards compute the same
+     * value from the same number, so they cannot end up inverted
+     * relative to each other no matter how a correction shifts them. */
+    int state = (int)((phase_now / period) % 2ULL);
+
+    if (state == s_last_applied_state) {
+        return; /* already showing this; don't re-send an RMT frame */
+    }
+    s_last_applied_state = state;
+
+    esp_err_t err;
+    if (state == 0) {
+        led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); /* dim green */
+        err = led_strip_refresh(s_led_strip);
+    } else {
+        err = led_strip_clear(s_led_strip);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "led update failed: %s", esp_err_to_name(err));
+    }
+}
+
+esp_err_t init_gptimer(uint64_t phase_now) {
+
+    if (s_gptimer_led != NULL) {
+        return ESP_ERR_INVALID_STATE; 
+    }
 
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT, 
@@ -48,39 +88,61 @@ esp_err_t init_gptimer() {
     ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
 
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = period,             // Fire initial alarm at 1,000,000 ticks (1 second)
-        .flags.auto_reload_on_alarm = false // CRITICAL: Keep it false to retain monotonic count
+        .alarm_count = ticks_to_next_boundary(phase_now),            
+        .flags.auto_reload_on_alarm = false 
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &alarm_config));
     ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
 
-    ESP_LOGI(TAG, "GPTimer started, initial phase = %llu us", (unsigned long long)period);
+    blinker_led_apply(esp_timer_get_time());
+
+    ESP_LOGI(TAG, "GPTimer started, first alarm in %llu us", (unsigned long long)alarm_config.alarm_count);
 
     return ESP_OK;
+}
+
+esp_err_t blinker_timer_arm_next(uint64_t phase_now)
+{
+    if (s_gptimer_led == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    portENTER_CRITICAL(s_timer_lock);
+    uint64_t current_raw = 0;
+    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer_led, &current_raw));
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = current_raw + ticks_to_next_boundary(phase_now),
+        .reload_count = 0, 
+        .flags.auto_reload_on_alarm = false,
+    };
+    esp_err_t err = gptimer_set_alarm_action(s_gptimer_led, &alarm_config);
+    portEXIT_CRITICAL(s_timer_lock);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to arm next alarm: %s", esp_err_to_name(err));
+    }
+
+    return err;
 }
 
 
 
 
 /* --- LED and blink task--- */
-void blinker_led_toggle(void)
-{
-    if (!s_led) {
-        return;
-    }
-    led_strip_set_pixel(s_led, 0, rcolor, gcolor, 0); 
-    led_strip_refresh(s_led);
-    vTaskDelay(ondelay);
-    led_strip_clear(s_led);
-
-}
 
 static void blink_task(void *arg)
 {
     uint64_t tick;
     for (;;) {
-        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {
-            blinker_led_toggle();    
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {    
+            uint64_t now = (uint64_t)esp_timer_get_time();
+            blinker_led_apply(now);
+            ESP_LOGI(TAG, "blink @ t = %lld us (reference clock)", (long long)now);
+
+            /* Re-arm the next one-shot alarm right away - the timer
+             * never auto-reloads, so this is the only thing keeping it
+             * running every 3s. */
+            ESP_ERROR_CHECK(blinker_timer_arm_next(now));
         }
     }
 }
@@ -99,13 +161,14 @@ esp_err_t init_led(void) {
         .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
         .flags.invert_out = false,
     };
+
     led_strip_rmt_config_t rmt_config = {
         .clk_src       = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = 10 * 1000 * 1000,
         .flags.with_dma = false,
     };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led));
-    led_strip_clear(s_led);
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip));
+    led_strip_clear(s_led_strip);
 
     ESP_LOGI(TAG, "LED initialized"); 
 
@@ -214,7 +277,7 @@ void app_main()
     //ESP_ERROR_CHECK(battery.Init());
     ESP_ERROR_CHECK(init_led());
     ESP_ERROR_CHECK(init_espnow_timesync());
-    ESP_ERROR_CHECK(init_gptimer());
+    ESP_ERROR_CHECK(init_gptimer(esp_timer_get_time()));
     ESP_ERROR_CHECK(flashlog_init());
     ESP_ERROR_CHECK(imu_init());
     ESP_ERROR_CHECK(ble_control_init());
@@ -222,7 +285,3 @@ void app_main()
     ESP_LOGI(TAG, "Master ready - broadcasting every %d ms, blinking every %llu us",
              TIMESYNC_BROADCAST_INTERVAL_MS, period);
 }
-
-
-
-

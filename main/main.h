@@ -67,8 +67,6 @@ typedef struct __attribute__((packed)) {
 static StreamBufferHandle_t xImuStreamBuffer = NULL;
 static bno085_handle_t      bno085;
 static gptimer_handle_t     s_gptimer_imu = NULL;
-
-// Motion
 float _motion_data[23] = { 0.0 };
 uint8_t _i2c_write_array[10] = { 0 };
 uint8_t _i2c_read_array[10] = { 0 };
@@ -76,7 +74,7 @@ uint8_t _i2c_write_size = 0;
 float x = 0.0;  // X-axis acceleration
 float y = 0.0;  // Y-axis acceleration
 float z = 0.0;  // Z-axis acceleration
-static int64_t start_time, end_time  = 0;  
+
 
 
 // LED
@@ -85,54 +83,19 @@ static int64_t start_time, end_time  = 0;
 #define LED_STRIP_NUM_PIXELS 1      
 #define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
 #define TIMESYNC_BROADCAST_INTERVAL_MS 2000
+#define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
 
 static TaskHandle_t         s_ledtask      = NULL;
 static gptimer_handle_t     s_gptimer_led  = NULL;
 static QueueHandle_t        s_blink_evt_q  = NULL;
-static led_strip_handle_t   s_led          = NULL;
+static led_strip_handle_t   s_led_strip    = NULL;
 static volatile bool        s_timer_started = false;
 static uint                 rcolor=7;
 static uint                 gcolor=0;
-static uint                 ondelay=80;
 static uint64_t             period=3000000;
+static int                  s_last_applied_state = -1;
+static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
 
 
-// ESPNOW
-
-static uint8_t s_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-
-
-typedef enum {
-    EXAMPLE_ESPNOW_SEND_CB,
-    EXAMPLE_ESPNOW_RECV_CB,
-} espnow_event_id_t;
-
-typedef struct {
-    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
-    esp_now_send_status_t status;
-} espnow_event_send_cb_t;
-
-typedef struct {
-    uint8_t mac_addr[ESP_NOW_ETH_ALEN];
-    uint8_t *data;
-    int data_len;
-} espnow_event_recv_cb_t;
-
-typedef union {
-    espnow_event_send_cb_t send_cb;
-    espnow_event_recv_cb_t recv_cb;
-} espnow_event_info_t;
-
-/* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */
-typedef struct {
-    espnow_event_id_t id;
-    espnow_event_info_t info;
-} espnow_event_t;
-
-enum {
-    EXAMPLE_ESPNOW_DATA_BROADCAST,
-    EXAMPLE_ESPNOW_DATA_UNICAST,
-    EXAMPLE_ESPNOW_DATA_MAX,
-};
 
 
