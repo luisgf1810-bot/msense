@@ -58,6 +58,8 @@ void blinker_led_apply(uint64_t phase_now)
     if (state == 0) {
         led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); /* dim green */
         err = led_strip_refresh(s_led_strip);
+        vTaskDelay(10);
+        err = led_strip_clear(s_led_strip);
     } else {
         err = led_strip_clear(s_led_strip);
     }
