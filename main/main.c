@@ -10,7 +10,7 @@ static uint64_t ticks_to_next_boundary(uint64_t phase_now)
 {
     uint64_t delay = period - (phase_now % period);
     if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
-        delay += period;
+        delay += period; /* too close - take nextone */
     }
     return delay;
 }
@@ -136,10 +136,18 @@ static void blink_task(void *arg)
 {
     uint64_t tick;
     for (;;) {
-        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {    
+        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {  
+            
+            led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); 
+            led_strip_refresh(s_led_strip);
+            vTaskDelay(80);
+            led_strip_clear(s_led_strip);
             uint64_t now = (uint64_t)esp_timer_get_time();
-            blinker_led_apply(now);
-            ESP_LOGI(TAG, "blink @ t = %lld us (reference clock)", (long long)now);
+            //blinker_led_apply(now);
+
+            uint64_t tick = now / period;
+            ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us", tick, now);
+           
 
             /* Re-arm the next one-shot alarm right away - the timer
              * never auto-reloads, so this is the only thing keeping it
