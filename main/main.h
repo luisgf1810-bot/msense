@@ -48,32 +48,66 @@ static const char *TAG = "MAIN";
 
 
 // IMU
-#define SECTOR_SIZE             4096UL
-// 16KB RAM buffer to absorb flash erase latency
-#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  
- // Target 1Hz tracking
-#define IMU_SAMPLING_RATE_HZ    1000                
-#define SENS_ON_PIN 18U
-#define MOTION_WAKEUP_PIN 7U
+#define SENS_ON_PIN                 18U
+#define MOTION_WAKEUP_PIN           7U
+#define IMU_LA_SAMPLING_RATE_HZ     5000
+#define IMU_GRV_SAMPLING_RATE_HZ    25000
 
-// 10-byte packed structural representation of one IMU reading 
+typedef enum __attribute__((packed)) {
+    BNO_TYPE_EMPTY = 0,
+    BNO_TYPE_LINEAR_ACCEL = 1,
+    BNO_TYPE_GAME_ROTATION = 2
+} BNO_DataType_t;
+
 typedef struct __attribute__((packed)) {
-    uint32_t timestamp_us; 
-    int16_t accel_x;
-    int16_t accel_y;
-    int16_t accel_z;
-} imu_sample_t;
+    float x;
+    float y;
+    float z;
+} LinearAccel_t; // 12 bytes
 
-static StreamBufferHandle_t xImuStreamBuffer = NULL;
+typedef struct __attribute__((packed)) {
+    float i;
+    float j;
+    float k;
+    float real;
+} GameRotation_t; // 16 bytes
+
+
+typedef struct __attribute__((packed)) {
+    uint32_t       timestamp_ms; // 4 bytes
+    BNO_DataType_t type;         // 1 byte
+    
+    union {
+        LinearAccel_t  linear_accel;   // 12 bytes
+        GameRotation_t game_rotation;  // 16 bytes
+    }; // Union (16 bytes)
+} BNO085_FlashLog_t; // 21 bytes (No padding!)
+
+
 static bno085_handle_t      bno085;
-static gptimer_handle_t     s_gptimer_imu = NULL;
-float _motion_data[23] = { 0.0 };
-uint8_t _i2c_write_array[10] = { 0 };
-uint8_t _i2c_read_array[10] = { 0 };
-uint8_t _i2c_write_size = 0;
-float x = 0.0;  // X-axis acceleration
-float y = 0.0;  // Y-axis acceleration
-float z = 0.0;  // Z-axis acceleration
+
+
+
+
+
+// TIMER
+#define GPTIMER_RESOLUTION_HZ       (1000000ULL) // 1 MHz (1 tick = 1 us)
+#define TIMESYNC_BLINK_HZ           (3000000ULL)
+
+static bool                 s_timesync_state   = true;
+static TaskHandle_t         s_gptimer_task      = NULL;
+static gptimer_handle_t     s_gptimer      = NULL;
+static QueueHandle_t        s_gptimer_evt_q  = NULL;
+static portMUX_TYPE         s_gptimer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t             gptimer_period=TIMESYNC_BLINK_HZ;
+static volatile bool        s_timer_started = false;
+
+
+
+
+// FLASH Log
+#define SECTOR_SIZE             4096UL
+#define STREAM_BUFFER_SIZE      (SECTOR_SIZE * 4)  // 16KB RAM buffer to absorb flash erase latency
 
 
 
@@ -81,20 +115,16 @@ float z = 0.0;  // Z-axis acceleration
 #define LED_SLP_PIN   20
 #define LED_PIN   19                
 #define LED_STRIP_NUM_PIXELS 1      
-#define TIMER_RESOLUTION_HZ        (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 #define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
 
-static TaskHandle_t         s_ledtask      = NULL;
-static gptimer_handle_t     s_gptimer_led  = NULL;
-static QueueHandle_t        s_blink_evt_q  = NULL;
 static led_strip_handle_t   s_led_strip    = NULL;
-static volatile bool        s_timer_started = false;
-static uint                 rcolor=7;
-static uint                 gcolor=0;
-static uint64_t             period=3000000;
-static int                  s_last_applied_state = -1;
-static portMUX_TYPE         s_timer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint                 gcolor=7;
+
+
+
+// ESPNOW TIMESYNC
+
+#define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 
 
 

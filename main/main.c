@@ -8,117 +8,100 @@
  * BLINKER_MIN_SCHEDULE_AHEAD_US. */
 static uint64_t ticks_to_next_boundary(uint64_t phase_now)
 {
-    uint64_t delay = period - (phase_now % period);
+    uint64_t delay = gptimer_period - (phase_now % gptimer_period);
     if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
-        delay += period; /* too close - take nextone */
+        delay += gptimer_period; /* too close - take nextone */
     }
     return delay;
 }
 
 
+void start_imulogs() {
+    // stop timesync
+    espnow_time_initiator_stop();
+    s_timesync_state=false;
 
+    // init flash logging
+    ESP_ERROR_CHECK(flash_log_start());
+
+    // start imu logging
+    gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
+}
+
+void stop_imulogs() {
+    // stop flash logging
+    ESP_ERROR_CHECK(flash_log_stop());
+
+    // start espnow timesync
+    espnow_time_initiator_config_t config = {
+        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
+    };
+    espnow_time_initiator_start(&config);
+    s_timesync_state=true;
+
+    // start led blinking
+    gptimer_period=TIMESYNC_BLINK_HZ;
+}
 
 
 /* --- GPTimer Init and ISR Callback --- */
-static bool IRAM_ATTR led_timer_alarm_cb(gptimer_handle_t timer,   const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
+static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
     
     BaseType_t high_task_wakeup = pdFALSE;
     
     uint8_t evt = 1;
-    xQueueSendFromISR(s_blink_evt_q, &evt, &high_task_wakeup);
+    xQueueSendFromISR(s_gptimer_evt_q, &evt, &high_task_wakeup);
     return high_task_wakeup == pdTRUE;
-}
-
-static bool IRAM_ATTR imu_timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
-    BaseType_t high_task_awoken = pdFALSE;
-    
-    
-    // Return true if a high-priority task was awakened to trigger a context switch
-    return high_task_awoken == pdTRUE;
-}
-
-void blinker_led_apply(uint64_t phase_now)
-{
-    if (!s_led_strip) {
-        return;
-    }
-
-    /* THE key line: LED state is a pure function of the shared clock,
-     * never of our own previous state. Both boards compute the same
-     * value from the same number, so they cannot end up inverted
-     * relative to each other no matter how a correction shifts them. */
-    int state = (int)((phase_now / period) % 2ULL);
-
-    if (state == s_last_applied_state) {
-        return; /* already showing this; don't re-send an RMT frame */
-    }
-    s_last_applied_state = state;
-
-    esp_err_t err;
-    if (state == 0) {
-        led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); /* dim green */
-        err = led_strip_refresh(s_led_strip);
-        vTaskDelay(10);
-        err = led_strip_clear(s_led_strip);
-    } else {
-        err = led_strip_clear(s_led_strip);
-    }
-
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "led update failed: %s", esp_err_to_name(err));
-    }
 }
 
 esp_err_t init_gptimer(uint64_t phase_now) {
 
-    if (s_gptimer_led != NULL) {
+    if (s_gptimer != NULL) {
         return ESP_ERR_INVALID_STATE; 
     }
 
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT, 
         .direction = GPTIMER_COUNT_UP,          // Monotonic upward counting
-        .resolution_hz = TIMER_RESOLUTION_HZ,   // 1 MHz resolution = 1 tick per microsecond
+        .resolution_hz = GPTIMER_RESOLUTION_HZ,   // 1 MHz resolution = 1 tick per microsecond
     };
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &s_gptimer_led));
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &s_gptimer));
 
 
     gptimer_event_callbacks_t cbs = {
-        .on_alarm = led_timer_alarm_cb,
+        .on_alarm = timer_alarm_cb,
     };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer_led, &cbs, NULL));
-    ESP_ERROR_CHECK(gptimer_enable(s_gptimer_led));
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_gptimer, &cbs, NULL));
+    ESP_ERROR_CHECK(gptimer_enable(s_gptimer));
 
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = ticks_to_next_boundary(phase_now),            
         .flags.auto_reload_on_alarm = false 
     };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer_led, &alarm_config));
-    ESP_ERROR_CHECK(gptimer_start(s_gptimer_led));
-
-    blinker_led_apply(esp_timer_get_time());
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_gptimer, &alarm_config));
+    ESP_ERROR_CHECK(gptimer_start(s_gptimer));
 
     ESP_LOGI(TAG, "GPTimer started, first alarm in %llu us", (unsigned long long)alarm_config.alarm_count);
 
     return ESP_OK;
 }
 
-esp_err_t blinker_timer_arm_next(uint64_t phase_now)
+esp_err_t gptimer_arm_next(uint64_t phase_now)
 {
-    if (s_gptimer_led == NULL) {
+    if (s_gptimer == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    portENTER_CRITICAL(s_timer_lock);
+    portENTER_CRITICAL(s_gptimer_lock);
     uint64_t current_raw = 0;
-    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer_led, &current_raw));
+    ESP_ERROR_CHECK(gptimer_get_raw_count(s_gptimer, &current_raw));
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = current_raw + ticks_to_next_boundary(phase_now),
         .reload_count = 0, 
         .flags.auto_reload_on_alarm = false,
     };
-    esp_err_t err = gptimer_set_alarm_action(s_gptimer_led, &alarm_config);
-    portEXIT_CRITICAL(s_timer_lock);
+    esp_err_t err = gptimer_set_alarm_action(s_gptimer, &alarm_config);
+    portEXIT_CRITICAL(s_gptimer_lock);
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "failed to arm next alarm: %s", esp_err_to_name(err));
@@ -127,40 +110,41 @@ esp_err_t blinker_timer_arm_next(uint64_t phase_now)
     return err;
 }
 
-
-
-
-/* --- LED and blink task--- */
-
-static void blink_task(void *arg)
+static void timer_task(void *arg)
 {
     uint64_t tick;
     for (;;) {
-        if (xQueueReceive(s_blink_evt_q, &tick, portMAX_DELAY) == pdTRUE) {  
+        if (xQueueReceive(s_gptimer_evt_q, &tick, portMAX_DELAY) == pdTRUE) {  
             
-            led_strip_set_pixel(s_led_strip, 0, rcolor, gcolor, 0); 
-            led_strip_refresh(s_led_strip);
-            vTaskDelay(80);
-            led_strip_clear(s_led_strip);
-            uint64_t now = (uint64_t)esp_timer_get_time();
-            //blinker_led_apply(now);
+            if (!s_timesync_state) {
+                bno085_service(bno085);
+            } else {
+                led_strip_set_pixel(s_led_strip, 0, 0, gcolor, 0); 
+                led_strip_refresh(s_led_strip);
+                vTaskDelay(80);
+                led_strip_clear(s_led_strip);
+            } 
 
-            uint64_t tick = now / period;
-            ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us", tick, now);
-           
+            uint64_t now = (uint64_t)esp_timer_get_time();
+
+            if (s_timesync_state) {
+                uint64_t tick = now / gptimer_period;
+                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us", tick, now);
+            }
 
             /* Re-arm the next one-shot alarm right away - the timer
              * never auto-reloads, so this is the only thing keeping it
              * running every 3s. */
-            ESP_ERROR_CHECK(blinker_timer_arm_next(now));
+            ESP_ERROR_CHECK(gptimer_arm_next(now));
         }
     }
 }
 
+
+/* Initialize led strip */
 esp_err_t init_led(void) {
 
     // Enable the power supply to the LED Strip 
-    /* When ESPNOW sending or receiving callback function is called, post event to ESPNOW task. */    
     gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_SLP_PIN, 1);
 
@@ -187,8 +171,7 @@ esp_err_t init_led(void) {
 
 
 
-
-/* --- Initialize Wi-Fi & ESP-NOW Managed Sync --- */
+/* --- Initialize Wi-Fi & ESP-NOW TIME Sync --- */
 esp_err_t init_espnow_timesync(void) {
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -212,28 +195,43 @@ esp_err_t init_espnow_timesync(void) {
     };
     espnow_time_initiator_start(&config);
 
-    ESP_LOGI(TAG, "ESPNOW initialized"); 
+    ESP_LOGI(TAG, "ESPNOW TIMESYNC initialized"); 
 
     return ESP_OK;
 }
 
 
 
-
 /* --- Initialize and IMU callbacks --- */
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
-    if (value->sensor_id == BNO085_SENSOR_LINEAR_ACCELERATION) {
-        ESP_LOGI(TAG, "(%" PRIu64 ") Linear Acceleration: x=%.4f, y=%.4f, z=%.4f", 
-            esp_timer_get_time(),
-            value->data.linear_acceleration.x, 
-            value->data.linear_acceleration.y,
-            value->data.linear_acceleration.z);
+    switch (value->sensor_id) {
+
+        case BNO085_SENSOR_GAME_ROTATION_VECTOR:
+            printf("%.4f,%.4f,%.4f,%.4f\n",
+                    value->data.game_rotation_vector.i, 
+                    value->data.game_rotation_vector.j,
+                    value->data.game_rotation_vector.k,
+                    value->data.game_rotation_vector.real
+                    );
+            break;
+        case BNO085_SENSOR_LINEAR_ACCELERATION:
+            printf("%.4f,%.4f,%.4f\n",
+                    value->data.linear_acceleration.x, 
+                    value->data.linear_acceleration.y,
+                    value->data.linear_acceleration.z
+                    );
+            break;
+
+        default:
+            break;
+               
     }
 }
 
 esp_err_t imu_init() {
- // Create I2C bus for BNO085
+
+    // Create I2C bus for BNO085
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = GPIO_NUM_8,
@@ -257,9 +255,10 @@ esp_err_t imu_init() {
     // Initialize BNO085
     ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
-    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, 100000);  // 10Hz
+    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);  // 200hz
+    bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ); // 40hz
 
-    ESP_LOGI(TAG, "IMU initialized"); 
+    ESP_LOGI(TAG, "IMU initialized, GRV:%d hz, LA:%d hz", IMU_GRV_SAMPLING_RATE_HZ, IMU_LA_SAMPLING_RATE_HZ ); 
 
     return ESP_OK;
 }
@@ -280,18 +279,17 @@ void app_main()
     ESP_ERROR_CHECK(ret);
 
     // blink stuff
-    s_blink_evt_q = xQueueCreate(4, sizeof(uint64_t));
-    xTaskCreate(blink_task, "blink_task", 4096, NULL, 5, &s_ledtask);  
+    s_gptimer_evt_q = xQueueCreate(4, sizeof(uint64_t));
+    xTaskCreate(timer_task, "timer_task", 4096, NULL, 5, &s_gptimer_task);  
 
     // SetUp
     //ESP_ERROR_CHECK(battery.Init());
     ESP_ERROR_CHECK(init_led());
     ESP_ERROR_CHECK(init_espnow_timesync());
     ESP_ERROR_CHECK(init_gptimer(esp_timer_get_time()));
-    ESP_ERROR_CHECK(flashlog_init());
     ESP_ERROR_CHECK(imu_init());
     ESP_ERROR_CHECK(ble_control_init());
 
     ESP_LOGI(TAG, "Master ready - broadcasting every %d ms, blinking every %llu us",
-             TIMESYNC_BROADCAST_INTERVAL_MS, period);
+             TIMESYNC_BROADCAST_INTERVAL_MS, gptimer_period);
 }

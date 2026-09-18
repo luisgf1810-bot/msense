@@ -21,22 +21,24 @@ static void notify_status(void);
 
 static void do_start(void)
 {
-    if (!s_logging_active) {
+    /*if (!s_logging_active) {
         if (imu_flash_log_start() == ESP_OK) {
             s_logging_active = true;
             ESP_LOGI(BLETAG, "logging started (BLE command)");
         }
-    }
+    }*/
+    start_imulogs();
     notify_status();
 }
 
 static void do_stop(void)
 {
-    if (s_logging_active) {
+    /*if (s_logging_active) {
         imu_flash_log_stop();
         s_logging_active = false;
         ESP_LOGI(BLETAG, "logging stopped (BLE command)");
-    }
+    }   */
+    stop_imulogs();
     notify_status();
 }
 

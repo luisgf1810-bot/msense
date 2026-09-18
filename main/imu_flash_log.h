@@ -38,13 +38,12 @@ extern "C" {
  * portable (no compiler-inserted padding).
  */
 typedef struct __attribute__((packed)) {
-    uint64_t timestamp_us;   /* esp_timer_get_time() at sample time      */
+    uint64_t timestamp_us;   
     float    accel_x;
     float    accel_y;
     float    accel_z;
 } imu_samples_t;
 
-_Static_assert(sizeof(imu_samples_t) == 20, "imu_samples_t must be 20 bytes");
 
 typedef struct {
     uint32_t sectors_written;
@@ -62,11 +61,11 @@ typedef struct {
 esp_err_t flashlog_init(void);
 
 /* Starts the 10 ms esp_timer that feeds the logger. */
-esp_err_t imu_flash_log_start(void);
+esp_err_t flash_log_start(void);
 
 /* Stops the timer (does not flush a partially-filled buffer; call
  * imu_flash_log_flush_partial() first if you need that on shutdown). */
-esp_err_t imu_flash_log_stop(void);
+esp_err_t flash_log_stop(void);
 
 /* Force whatever is currently buffered out to flash immediately, even
  * if the sector isn't full (pads the rest of the sector with the
@@ -80,6 +79,10 @@ void imu_flash_log_get_stats(imu_log_stats_t *out);
  * extraction / a host-side decode tool / unit tests. */
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index,
                                          void *out_buf_4096_bytes);
+
+
+
+extern int64_t get_synced_time_us(void);
 
 #ifdef __cplusplus
 }

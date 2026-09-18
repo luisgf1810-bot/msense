@@ -48,7 +48,7 @@ extern "C" {
 #define BLE_GAP_URI_PREFIX_HTTPS 0x17
 #define BLE_GAP_LE_ROLE_PERIPHERAL 0x00
 
-#define DEVICE_NAME "ESP32C6-IMULOG"
+#define DEVICE_NAME "MASTER"
 
 
 static const char *BLETAG = "ble_control";
@@ -81,6 +81,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg);
 /* Library function declarations */
 void ble_store_config_init(void);
 
+void start_imulogs();
+void stop_imulogs();
 
 #ifdef __cplusplus
 }
