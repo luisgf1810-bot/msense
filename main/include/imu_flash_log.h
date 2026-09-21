@@ -25,6 +25,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "esp_timer.h"
+
+#include "imu.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,17 +35,6 @@ extern "C" {
 
 #define IMU_LOG_PARTITION_LABEL   "imu_log"
 #define IMU_SAMPLE_PERIOD_US      10000   /* 10 ms -> 100 Hz */
-
-/* ---- one IMU sample -----------------------------------------------------
- * 8 + 4 + 4 + 4 = 20 bytes, packed so the on-flash layout is exact and
- * portable (no compiler-inserted padding).
- */
-typedef struct __attribute__((packed)) {
-    uint64_t timestamp_us;   
-    float    accel_x;
-    float    accel_y;
-    float    accel_z;
-} imu_samples_t;
 
 
 typedef struct {
@@ -81,8 +73,6 @@ esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index,
                                          void *out_buf_4096_bytes);
 
 
-
-extern int64_t get_synced_time_us(void);
 
 #ifdef __cplusplus
 }

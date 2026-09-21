@@ -42,9 +42,10 @@ _Static_assert(sizeof(sector_header_t) == 16, "header must be 16 bytes");
  * one erase_range() + one write() per sector, no partial writes, no
  * filesystem bookkeeping layered on top. */
 typedef struct __attribute__((packed)) {
-    sector_header_t     header;                         // 16 byte header
-    imu_samples_t       samples[SAMPLES_PER_SECTOR];    // 21 bytes IMU sample
-    uint32_t            padd;                           // 4 byte padding
+    sector_header_t             header;                         // 16 byte header
+    imu_samples_t               samples[SAMPLES_PER_SECTOR];    // 21 bytes IMU flash
+    uint32_t                    padd;                           // 4 byte padding
+    uint16_t                    reserved;                       // 2 bytes reserved
 } log_sector_t;
 
 _Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
@@ -100,7 +101,7 @@ static void write_sector_to_flash(log_sector_t *sec)
 
     size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
 
-    int64_t t0 = get_synced_time_us();
+    int64_t t0 = esp_timer_get_time();
 
     /* Flash can only clear bits via erase; every sector must be erased
      * before it is reused (this is a ring, so after the first lap every
@@ -126,7 +127,7 @@ static void write_sector_to_flash(log_sector_t *sec)
     s_stats.sectors_written++;
     ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
               s_next_sector, sec->header.seq, sec->header.sample_count,
-              (long long)(get_synced_time_us() - t0));
+              (long long)(esp_timer_get_time() - t0));
 
 advance:
     s_next_sector++;

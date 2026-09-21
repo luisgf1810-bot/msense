@@ -39,7 +39,9 @@
 #include "led_strip.h"
 #include "ble_control.h"
 #include "imu_flash_log.h"
+#include "imu.h"
 #include "bno085.h"
+
 
 
 
@@ -53,35 +55,6 @@ static const char *TAG = "MAIN";
 #define IMU_LA_SAMPLING_RATE_HZ     5000
 #define IMU_GRV_SAMPLING_RATE_HZ    25000
 
-typedef enum __attribute__((packed)) {
-    BNO_TYPE_EMPTY = 0,
-    BNO_TYPE_LINEAR_ACCEL = 1,
-    BNO_TYPE_GAME_ROTATION = 2
-} BNO_DataType_t;
-
-typedef struct __attribute__((packed)) {
-    float x;
-    float y;
-    float z;
-} LinearAccel_t; // 12 bytes
-
-typedef struct __attribute__((packed)) {
-    float i;
-    float j;
-    float k;
-    float real;
-} GameRotation_t; // 16 bytes
-
-
-typedef struct __attribute__((packed)) {
-    uint32_t       timestamp_ms; // 4 bytes
-    BNO_DataType_t type;         // 1 byte
-    
-    union {
-        LinearAccel_t  linear_accel;   // 12 bytes
-        GameRotation_t game_rotation;  // 16 bytes
-    }; // Union (16 bytes)
-} BNO085_FlashLog_t; // 21 bytes (No padding!)
 
 
 static bno085_handle_t      bno085;
@@ -91,16 +64,16 @@ static bno085_handle_t      bno085;
 
 
 // TIMER
-#define GPTIMER_RESOLUTION_HZ       (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BLINK_HZ           (3000000ULL)
+#define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
+#define TIMESYNC_BLINK_HZ       (3000000ULL)
 
-static bool                 s_timesync_state   = true;
-static TaskHandle_t         s_gptimer_task      = NULL;
-static gptimer_handle_t     s_gptimer      = NULL;
-static QueueHandle_t        s_gptimer_evt_q  = NULL;
-static portMUX_TYPE         s_gptimer_lock  = portMUX_INITIALIZER_UNLOCKED;
-static uint64_t             gptimer_period=TIMESYNC_BLINK_HZ;
-static volatile bool        s_timer_started = false;
+static bool                     s_timesync_state   = true;
+static TaskHandle_t             s_gptimer_task      = NULL;
+static gptimer_handle_t         s_gptimer      = NULL;
+static QueueHandle_t            s_gptimer_evt_q  = NULL;
+static portMUX_TYPE             s_gptimer_lock  = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t                 gptimer_period=TIMESYNC_BLINK_HZ;
+static volatile bool            s_timer_started = false;
 
 
 
