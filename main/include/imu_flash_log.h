@@ -1,40 +1,61 @@
 #pragma once
-/*
- * imu_flash_log.h
- *
- * Raw-partition IMU logger for ESP32-C6 / ESP-IDF.
- *
- *   - Samples are produced every 10 ms (100 Hz) by an esp_timer callback.
- *   - Samples land in one of two RAM sector buffers (double buffering).
- *   - When a buffer fills exactly one flash sector's worth of samples,
- *     it is handed to a dedicated writer task which erases + writes the
- *     target flash sector using the raw esp_partition_* API directly
- *     (no FAT/LittleFS/NVS layer in the way).
- *   - The partition is treated as a circular log ("ring") across all of
- *     its sectors. Because every sector in the 4 MB region gets erased
- *     and rewritten in strict round-robin order, wear is spread exactly
- *     evenly across the whole partition -- this *is* the wear-leveling
- *     strategy (no separate translation layer is needed for a pure
- *     sequential log like this).
- *   - Each sector is self-describing (magic + monotonic sequence number
- *     + CRC32), so on boot we scan headers to find where the log left
- *     off and resume there, surviving resets/power loss.
- */
+
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_err.h"
 #include "esp_timer.h"
+#include <string.h>
+#include <math.h>
+#include <inttypes.h>
+
+#include "esp_partition.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+#include "esp_random.h"
+#include "esp_rom_crc.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include "imu.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 #define IMU_LOG_PARTITION_LABEL   "imu_log"
 #define IMU_SAMPLE_PERIOD_US      10000   /* 10 ms -> 100 Hz */
+#define FLASH_SECTOR_SIZE   4096u
+#define SECTOR_MAGIC        0x494D5546u   /* "IMUF" */
+
+extern const char *TAG;
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;         /* SECTOR_MAGIC when this sector holds valid data */
+    uint32_t seq;           /* monotonically increasing write sequence number */
+    uint16_t sample_count;  /* number of valid imu_sample_t entries that follow */
+    uint16_t reserved;
+    uint32_t crc32;         /* CRC32 over the first sample_count samples       */
+} sector_header_t;
+
+_Static_assert(sizeof(sector_header_t) == 16, "header must be 16 bytes");
+
+#define SAMPLES_PER_SECTOR ((FLASH_SECTOR_SIZE - sizeof(sector_header_t)) / sizeof(imu_samples_t))
+
+/* A log_sector_t is exactly one flash sector. Sampling writes straight
+ * into buf.samples[]; at flush time we finish filling buf.header and
+ * push the *entire* 4096-byte struct to flash in a single
+ * esp_partition_write() call -- this is the "fastest api" write path:
+ * one erase_range() + one write() per sector, no partial writes, no
+ * filesystem bookkeeping layered on top. */
+typedef struct __attribute__((packed)) {
+    sector_header_t             header;                         // 16 byte header
+    imu_samples_t               samples[SAMPLES_PER_SECTOR];    // 21 bytes IMU flash
+    uint32_t                    padd;                           // 4 byte padding
+    uint16_t                    reserved;                       // 2 bytes reserved
+} log_sector_t;
+
+_Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
 
 
 typedef struct {
@@ -47,6 +68,30 @@ typedef struct {
     uint32_t total_sectors;
     uint32_t wrap_count;          /* how many times the ring has wrapped */
 } imu_log_stats_t;
+
+
+
+
+static const esp_partition_t *s_partition;
+static uint32_t s_total_sectors;
+
+/* Double buffer: while one is being filled by the timer callback, the
+ * other is either idle (already flushed) or being written by the
+ * writer task. Exactly one of {s_buf[0], s_buf[1]} is "active" at a
+ * time; the other is either empty or in flight to flash. */
+static log_sector_t s_buf[2];
+static volatile uint8_t s_active = 0;
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static QueueHandle_t   s_flush_q;      /* holds indices (0/1) of full buffers */
+static TaskHandle_t    s_writer_task;
+
+
+static uint32_t s_next_sector;
+static uint32_t s_seq;
+static imu_log_stats_t s_stats;
+
+
 
 /* One-time setup: finds the partition, scans it for a resume point,
  * creates the writer task + queue. Does NOT start sampling yet. */
@@ -69,11 +114,6 @@ void imu_flash_log_get_stats(imu_log_stats_t *out);
 
 /* Read back one raw 4096-byte sector (header + samples) for offline
  * extraction / a host-side decode tool / unit tests. */
-esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index,
-                                         void *out_buf_4096_bytes);
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
 
 
-
-#ifdef __cplusplus
-}
-#endif

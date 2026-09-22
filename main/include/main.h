@@ -46,7 +46,7 @@
 
 
 // Logs
-static const char *TAG = "MAIN";
+const char *TAG = "MAIN";
 
 
 // IMU
