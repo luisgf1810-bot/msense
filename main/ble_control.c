@@ -1,5 +1,4 @@
 #include "ble_control.h"
-#include "imu_flash_log.h"
 #include <string.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -294,7 +293,7 @@ static void nimble_host_config_init(void) {
 /* Public entry point                                                    */
 /* -------------------------------------------------------------------- */
 
-esp_err_t ble_control_init(void)
+esp_err_t init_ble(void)
 {
     // Initialize NVS
     esp_err_t err = nvs_flash_init(); 

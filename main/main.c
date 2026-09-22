@@ -16,32 +16,164 @@ static uint64_t ticks_to_next_boundary(uint64_t phase_now)
 }
 
 
-void start_imulogs() {
-    // stop timesync
-    espnow_time_initiator_stop();
-    s_timesync_state=false;
+/*  Battery */
 
-    // init flash logging
-    ESP_ERROR_CHECK(flash_log_start());
-
-    // start imu logging
-    gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
+esp_err_t init_battery() {
+  
+    return ESP_OK;
 }
 
-void stop_imulogs() {
-    // stop flash logging
-    ESP_ERROR_CHECK(flash_log_stop());
 
-    // start espnow timesync
-    espnow_time_initiator_config_t config = {
-        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
-    };
-    espnow_time_initiator_start(&config);
-    s_timesync_state=true;
 
-    // start led blinking
-    gptimer_period=TIMESYNC_BLINK_HZ;
+
+/* --- Flash functions --- */
+
+static inline bool seq_is_newer(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) > 0;
 }
+
+static void write_sector_to_flash(log_sector_t *sec)
+{
+    const uint8_t *payload = (const uint8_t *)sec + sizeof(sector_header_t);
+
+    sec->header.magic = SECTOR_MAGIC;
+    sec->header.seq   = s_seq++;
+    sec->header.crc32 = esp_rom_crc32_le(0, payload, (uint32_t)sec->header.sample_count * sizeof(imu_sample_t));
+
+    size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
+
+    int64_t t0 = esp_timer_get_time();
+
+    /* Flash can only clear bits via erase; every sector must be erased
+     * before it is reused (this is a ring, so after the first lap every
+     * sector already holds old data). */
+    esp_err_t err = esp_partition_erase_range(s_partition, offset, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "erase failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_erase_failed++;
+        goto advance;
+    }
+
+    /* Single write call for the whole sector (header + payload together)
+     * -- this is the fastest available IDF path for raw partition I/O:
+     * esp_partition_write() maps directly onto the underlying
+     * spi_flash_write(), with no filesystem indirection. */
+    err = esp_partition_write(s_partition, offset, sec, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "write failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_write_failed++;
+        goto advance;
+    }
+
+    s_stats.sectors_written++;
+    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
+              s_next_sector, sec->header.seq, sec->header.sample_count,
+              (long long)(esp_timer_get_time() - t0));
+
+advance:
+    s_next_sector++;
+    if (s_next_sector >= s_total_sectors) {
+        s_next_sector = 0;
+        s_stats.wrap_count++;
+    }
+    s_stats.next_sector = s_next_sector;
+    s_stats.next_seq     = s_seq;
+}
+
+static void flash_task(void *arg)
+{
+    uint8_t idx;
+    for (;;) {
+        if (xQueueReceive(s_flush_q, &idx, portMAX_DELAY) == pdTRUE) {
+            write_sector_to_flash(&s_buf[idx]);
+            /* Buffer is now free for the sampler to reuse. */
+            taskENTER_CRITICAL(&s_mux);
+            s_buf[idx].header.sample_count = 0;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+    }
+}
+                                           
+esp_err_t init_flash(void) {
+
+    s_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, IMU_LOG_PARTITION_LABEL);
+    if (!s_partition) {
+        ESP_LOGE(TAG, "partition '%s' not found -- check partitions.csv", IMU_LOG_PARTITION_LABEL);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (s_partition->size % FLASH_SECTOR_SIZE != 0) {
+        ESP_LOGE(TAG, "partition size must be a multiple of %u bytes", FLASH_SECTOR_SIZE);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    s_total_sectors = (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE);
+    memset(s_buf, 0, sizeof(s_buf));
+    memset(&s_stats, 0, sizeof(s_stats));
+    s_stats.total_sectors = s_total_sectors;
+
+    ESP_LOGI(TAG, "partition '%s': %u bytes, %" PRIu32 " sectors, %u samples/sector",
+                s_partition->label, (unsigned)s_partition->size, s_total_sectors,
+                (unsigned)SAMPLES_PER_SECTOR);
+
+    return ESP_OK;
+}
+
+esp_err_t flash_log_start(void)
+{
+   
+    s_next_sector = 0;
+    s_seq = 0;
+    s_stats.next_sector = s_next_sector;
+    s_stats.next_seq    = s_seq;
+
+    return ESP_OK;
+}
+
+esp_err_t flash_log_stop(void) {
+
+    //vTaskDelete(&s_writer_task);
+    ESP_LOGI(TAG, "flashlog stoped");
+    return ESP_OK;
+}
+
+esp_err_t imu_flash_log_flush_partial(void)
+{
+    uint8_t idx;
+    uint16_t count;
+
+    taskENTER_CRITICAL(&s_mux);
+    idx = s_active;
+    count = s_buf[idx].header.sample_count;
+    if (count > 0) {
+        uint8_t other = 1 - idx;
+        s_active = other; /* stop new samples from landing in idx */
+    }
+    taskEXIT_CRITICAL(&s_mux);
+
+    if (count == 0) {
+        return ESP_OK; /* nothing pending */
+    }
+    xQueueSend(s_flush_q, &idx, portMAX_DELAY);
+    return ESP_OK;
+}
+
+void imu_flash_log_get_stats(imu_log_stats_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_mux);
+    *out = s_stats;
+    taskEXIT_CRITICAL(&s_mux);
+}
+
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes)
+{
+    if (sector_index >= s_total_sectors) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_partition_read(s_partition, (size_t)sector_index * FLASH_SECTOR_SIZE,  out_buf_4096_bytes, FLASH_SECTOR_SIZE);
+}
+
 
 
 /* --- GPTimer Init and ISR Callback --- */
@@ -202,34 +334,91 @@ esp_err_t init_espnow_timesync(void) {
 
 
 
-/* --- Initialize and IMU callbacks --- */
+/* --- IMU  --- */
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
+
+    uint8_t full_idx = 0xFF;
+    imu_sample_t sample;
+
+    sample.timestamp_ms = (uint32_t)(esp_timer_get_time()/1000);
+    
     switch (value->sensor_id) {
 
         case BNO085_SENSOR_GAME_ROTATION_VECTOR:
-            printf("%.4f,%.4f,%.4f,%.4f\n",
+            sample.type                 = BNO_TYPE_GAME_ROTATION;
+            sample.game_rotation.i      = value->data.game_rotation_vector.i;
+            sample.game_rotation.j      = value->data.game_rotation_vector.j;
+            sample.game_rotation.k      = value->data.game_rotation_vector.k;
+            sample.game_rotation.real   = value->data.game_rotation_vector.real;
+            /*printf("%.4f,%.4f,%.4f,%.4f\n",
                     value->data.game_rotation_vector.i, 
                     value->data.game_rotation_vector.j,
                     value->data.game_rotation_vector.k,
                     value->data.game_rotation_vector.real
-                    );
+                    );*/
             break;
         case BNO085_SENSOR_LINEAR_ACCELERATION:
-            printf("%.4f,%.4f,%.4f\n",
+            sample.type                 = BNO_TYPE_LINEAR_ACCEL;
+            sample.linear_accel.x       = value->data.linear_acceleration.x;
+            sample.linear_accel.y       = value->data.linear_acceleration.y;
+            sample.linear_accel.z       = value->data.linear_acceleration.z;
+            /*printf("%.4f,%.4f,%.4f\n",
                     value->data.linear_acceleration.x, 
                     value->data.linear_acceleration.y,
                     value->data.linear_acceleration.z
-                    );
+                    );*/
             break;
 
         default:
             break;
                
     }
+
+
+    taskENTER_CRITICAL(&s_mux);
+    uint8_t idx = s_active;
+    log_sector_t *buf = &s_buf[idx];
+
+    if (buf->header.sample_count < SAMPLES_PER_SECTOR) {
+        buf->samples[buf->header.sample_count++] = sample;
+    }
+    if (buf->header.sample_count >= SAMPLES_PER_SECTOR) {
+        uint8_t other = 1 - idx;
+        if (s_buf[other].header.sample_count == 0) {
+            /* Other buffer already flushed -- safe to swap into it. */
+            s_active = other;
+            full_idx = idx;
+        } else {
+            /* Writer hasn't drained the other buffer yet. This means
+             * the flash writer is falling behind the 100 Hz sample
+             * rate (should not happen under normal conditions -- a
+             * 4 KB erase+write is on the order of tens of ms, versus
+             * the ~2 s it takes to fill a sector). We drop this
+             * sector's data rather than block the timer callback and
+             * skew the sample cadence. */
+            buf->header.sample_count = 0; /* discard, keep sampling */
+            s_stats.buffer_overruns++;
+        }
+    }
+    taskEXIT_CRITICAL(&s_mux);
+
+    if (full_idx != 0xFF) {
+        BaseType_t ok = xQueueSend(s_flush_q, &full_idx, 0);
+        if (ok != pdTRUE) {
+            /* Queue full (writer task starved) -- extremely unlikely
+             * since it only ever holds at most one pending item in
+             * this design, but handle it defensively. */
+            taskENTER_CRITICAL(&s_mux);
+            s_buf[full_idx].header.sample_count = 0;
+            s_stats.buffer_overruns++;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+    }
+    
 }
 
-esp_err_t imu_init() {
+esp_err_t init_imu() {
 
     // Create I2C bus for BNO085
     i2c_master_bus_config_t bus_config = {
@@ -263,7 +452,29 @@ esp_err_t imu_init() {
     return ESP_OK;
 }
 
+void start_imulogs() {
+    // stop timesync
+    espnow_time_initiator_stop();
 
+    // start imu logging
+    gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
+    s_timesync_state=false;
+}
+
+void stop_imulogs() {
+    // stop flash logging
+    ESP_ERROR_CHECK(flash_log_stop());
+
+    // start espnow timesync
+    espnow_time_initiator_config_t config = {
+        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
+    };
+    espnow_time_initiator_start(&config);
+    s_timesync_state=true;
+
+    // start led blinking
+    gptimer_period=TIMESYNC_BLINK_HZ;
+}
 
 
 
@@ -278,17 +489,32 @@ void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
-    // blink stuff
+    // Tasks
     s_gptimer_evt_q = xQueueCreate(4, sizeof(uint64_t));
-    xTaskCreate(timer_task, "timer_task", 4096, NULL, 5, &s_gptimer_task);  
+    if (!s_gptimer_evt_q) {
+        abort();
+    }
+    s_flush_q = xQueueCreate(2, sizeof(uint8_t));
+    if (!s_flush_q) {
+        abort();
+    }
+    BaseType_t ok = xTaskCreate(timer_task, "timer_task", 4096, NULL, 5, &s_gptimer_task);  
+    if (ok != pdPASS) {
+        abort();
+    }
+    ok = xTaskCreate(flash_task, "flash_task",  4096, NULL, tskIDLE_PRIORITY + 3, &s_writer_task);
+    if (ok != pdPASS) {
+        abort();
+    }
 
     // SetUp
-    //ESP_ERROR_CHECK(battery.Init());
+    ESP_ERROR_CHECK(init_battery());
     ESP_ERROR_CHECK(init_led());
     ESP_ERROR_CHECK(init_espnow_timesync());
     ESP_ERROR_CHECK(init_gptimer(esp_timer_get_time()));
-    ESP_ERROR_CHECK(imu_init());
-    ESP_ERROR_CHECK(ble_control_init());
+    ESP_ERROR_CHECK(init_imu());
+    ESP_ERROR_CHECK(init_flash());
+    ESP_ERROR_CHECK(init_ble());
 
     ESP_LOGI(TAG, "Master ready - broadcasting every %d ms, blinking every %llu us",
              TIMESYNC_BROADCAST_INTERVAL_MS, gptimer_period);

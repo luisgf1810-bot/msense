@@ -30,7 +30,7 @@ typedef struct __attribute__((packed)) {
         LinearAccel_t  linear_accel;   // 12 bytes
         GameRotation_t game_rotation;  // 16 bytes
     }; // Union (16 bytes)
-} imu_samples_t; // 21 bytes (No padding!)
+} imu_sample_t; // 21 bytes (No padding!)
 
 
 #endif

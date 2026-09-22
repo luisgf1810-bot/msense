@@ -75,7 +75,7 @@ static uint16_t s_conn_handle   = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_status_handle;
 static bool     s_logging_active = false;
 
-esp_err_t ble_control_init(void);
+esp_err_t init_ble(void);
 static int gap_event_handler(struct ble_gap_event *event, void *arg); 
 
 /* Library function declarations */
