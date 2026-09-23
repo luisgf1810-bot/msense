@@ -52,11 +52,13 @@ const char *TAG = "MAIN";
 #define SENS_ON_PIN                 18U
 #define MOTION_WAKEUP_PIN           7U
 #define IMU_LA_SAMPLING_RATE_HZ     5000
-#define IMU_GRV_SAMPLING_RATE_HZ    25000
+#define IMU_GRV_SAMPLING_RATE_HZ    (IMU_LA_SAMPLING_RATE_HZ*5)
 
 
 
-static bno085_handle_t      bno085;
+static uint64_t                 ti=0, te=0;
+static uint32_t                 rate=0;
+static bno085_handle_t          bno085;
 
 
 

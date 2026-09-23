@@ -3,17 +3,7 @@
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 
-/* Compute the number of ticks from "now" (phase_reference_us) to the
- * next BLINKER_PERIOD_US-aligned boundary, guaranteed to be >=
- * BLINKER_MIN_SCHEDULE_AHEAD_US. */
-static uint64_t ticks_to_next_boundary(uint64_t phase_now)
-{
-    uint64_t delay = gptimer_period - (phase_now % gptimer_period);
-    if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
-        delay += gptimer_period; /* too close - take nextone */
-    }
-    return delay;
-}
+
 
 
 /*  Battery */
@@ -177,6 +167,16 @@ esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_409
 
 
 /* --- GPTimer Init and ISR Callback --- */
+
+static uint64_t ticks_to_next_boundary(uint64_t phase_now)
+{
+    uint64_t delay = gptimer_period - (phase_now % gptimer_period);
+    if (delay < BLINKER_MIN_SCHEDULE_AHEAD_US) {
+        delay += gptimer_period; /* too close - take nextone */
+    }
+    return delay;
+}
+
 static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx) {
     
     BaseType_t high_task_wakeup = pdFALSE;
@@ -346,12 +346,21 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
     switch (value->sensor_id) {
 
         case BNO085_SENSOR_GAME_ROTATION_VECTOR:
+            te=esp_timer_get_time();
+            rate+=1;
             sample.type                 = BNO_TYPE_GAME_ROTATION;
             sample.game_rotation.i      = value->data.game_rotation_vector.i;
             sample.game_rotation.j      = value->data.game_rotation_vector.j;
             sample.game_rotation.k      = value->data.game_rotation_vector.k;
             sample.game_rotation.real   = value->data.game_rotation_vector.real;
-            /*printf("%.4f,%.4f,%.4f,%.4f\n",
+            if ((rate % 194)==0) {
+                    led_strip_set_pixel(s_led_strip, 0, 0, 0, 7); 
+                    led_strip_refresh(s_led_strip);
+                    vTaskDelay(1);
+                    led_strip_clear(s_led_strip);
+            }
+            /*printf("(%.4f)%.4f,%.4f,%.4f,%.4f\n",
+                    1000000/((te-ti)/rate),
                     value->data.game_rotation_vector.i, 
                     value->data.game_rotation_vector.j,
                     value->data.game_rotation_vector.k,
@@ -359,14 +368,23 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                     );*/
             break;
         case BNO085_SENSOR_LINEAR_ACCELERATION:
+            te=esp_timer_get_time();        
+            rate+=1;
             sample.type                 = BNO_TYPE_LINEAR_ACCEL;
             sample.linear_accel.x       = value->data.linear_acceleration.x;
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
-            /*printf("%.4f,%.4f,%.4f\n",
+            if ((rate % 194)==0) {
+                    led_strip_set_pixel(s_led_strip, 0, 0, 0, 87); 
+                    led_strip_refresh(s_led_strip);
+                    vTaskDelay(1);
+                    led_strip_clear(s_led_strip);
+            }
+            /*printf("(%.4f)%.4f,%.4f,%.4f\n",
+                    1000000/((te-ti)/rate),
                     value->data.linear_acceleration.x, 
                     value->data.linear_acceleration.y,
-                    value->data.linear_acceleration.z
+                    value-80>data.linear_acceleration.z
                     );*/
             break;
 
@@ -375,7 +393,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                
     }
 
-
+/*
     taskENTER_CRITICAL(&s_mux);
     uint8_t idx = s_active;
     log_sector_t *buf = &s_buf[idx];
@@ -386,35 +404,35 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
     if (buf->header.sample_count >= SAMPLES_PER_SECTOR) {
         uint8_t other = 1 - idx;
         if (s_buf[other].header.sample_count == 0) {
-            /* Other buffer already flushed -- safe to swap into it. */
+            // Other buffer already flushed -- safe to swap into it. 
             s_active = other;
             full_idx = idx;
         } else {
-            /* Writer hasn't drained the other buffer yet. This means
-             * the flash writer is falling behind the 100 Hz sample
-             * rate (should not happen under normal conditions -- a
-             * 4 KB erase+write is on the order of tens of ms, versus
-             * the ~2 s it takes to fill a sector). We drop this
-             * sector's data rather than block the timer callback and
-             * skew the sample cadence. */
-            buf->header.sample_count = 0; /* discard, keep sampling */
+            // * Writer hasn't drained the other buffer yet. This means
+            // * the flash writer is falling behind the 100 Hz sample
+            // * rate (should not happen under normal conditions -- a
+            // * 4 KB erase+write is on the order of tens of ms, versus
+            // * the ~2 s it takes to fill a sector). We drop this
+            // * sector's data rather than block the timer callback and
+            //  * skew the sample cadence. 
+            buf->header.sample_count = 0; // discard, keep sampling 
             s_stats.buffer_overruns++;
         }
     }
     taskEXIT_CRITICAL(&s_mux);
-
-    if (full_idx != 0xFF) {
+*/
+   /* if (full_idx != 0xFF) {
         BaseType_t ok = xQueueSend(s_flush_q, &full_idx, 0);
         if (ok != pdTRUE) {
-            /* Queue full (writer task starved) -- extremely unlikely
-             * since it only ever holds at most one pending item in
-             * this design, but handle it defensively. */
+            // Queue full (writer task starved) -- extremely unlikely
+            // since it only ever holds at most one pending item in
+            // this design, but handle it defensively. 
             taskENTER_CRITICAL(&s_mux);
             s_buf[full_idx].header.sample_count = 0;
             s_stats.buffer_overruns++;
             taskEXIT_CRITICAL(&s_mux);
         }
-    }
+    }*/
     
 }
 
@@ -444,8 +462,8 @@ esp_err_t init_imu() {
     // Initialize BNO085
     ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
-    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);  // 200hz
-    bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ); // 40hz
+    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);  
+    //bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ); 
 
     ESP_LOGI(TAG, "IMU initialized, GRV:%d hz, LA:%d hz", IMU_GRV_SAMPLING_RATE_HZ, IMU_LA_SAMPLING_RATE_HZ ); 
 
@@ -459,6 +477,8 @@ void start_imulogs() {
     // start imu logging
     gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
     s_timesync_state=false;
+    ti=esp_timer_get_time();
+    te=rate=0;
 }
 
 void stop_imulogs() {
@@ -481,6 +501,8 @@ void stop_imulogs() {
 // App main
 void app_main()
 {
+    BaseType_t ok;
+
      // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -498,7 +520,7 @@ void app_main()
     if (!s_flush_q) {
         abort();
     }
-    BaseType_t ok = xTaskCreate(timer_task, "timer_task", 4096, NULL, 5, &s_gptimer_task);  
+    ok = xTaskCreate(timer_task, "timer_task", 4096, NULL, 5, &s_gptimer_task);  
     if (ok != pdPASS) {
         abort();
     }
