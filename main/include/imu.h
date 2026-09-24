@@ -36,7 +36,7 @@ typedef struct __attribute__((packed)) {
 
 #define SENS_ON_PIN                 18U
 #define IMU_WAKEUP_PIN              7U
-#define IMU_LA_SAMPLING_RATE_HZ     10000
+#define IMU_LA_SAMPLING_RATE_HZ     5000
 #define IMU_GRV_SAMPLING_RATE_HZ    (IMU_LA_SAMPLING_RATE_HZ*5)
 #define IMU_ENABLE_GRV              false
 #define IMU_ENABLE_LA               true

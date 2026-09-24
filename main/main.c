@@ -144,7 +144,7 @@ static void write_sector_to_flash(log_sector_t *sec)
 advance:
     s_next_sector++;
     if (s_next_sector >= s_total_sectors) {
-        flash_log_stop();
+        stop_imulogs();
         /*s_next_sector = 0;
         s_stats.wrap_count++;*/
     }
@@ -459,14 +459,7 @@ esp_err_t init_imu() {
     // Initialize BNO085
     ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
-    if (IMU_ENABLE_LA) {
-        bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);
-        ESP_LOGI(TAG, "IMU initialized, LA:%d hz", IMU_LA_SAMPLING_RATE_HZ );  
-    }
-    if (IMU_ENABLE_GRV) {
-        bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ);
-        ESP_LOGI(TAG, "IMU initialized, GRV:%d hz", IMU_GRV_SAMPLING_RATE_HZ );  
-    }
+    
     
 
     return ESP_OK;
@@ -479,19 +472,41 @@ void start_imulogs() {
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
 
+    if (IMU_ENABLE_LA) {
+        bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);
+        ESP_LOGI(TAG, "IMU initialized, LA:%d hz", IMU_LA_SAMPLING_RATE_HZ );  
+    }
+    if (IMU_ENABLE_GRV) {
+        bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ);
+        ESP_LOGI(TAG, "IMU initialized, GRV:%d hz", IMU_GRV_SAMPLING_RATE_HZ );  
+    }
+
     // start imu logging
     gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
     s_timesync_state=false;
+
     ti=esp_timer_get_time();
     te=rate=0;
-}
+}   
 
 void stop_imulogs() {
-    // stop flash logging
+
     s_timesync_state=true;
+
+    // disable IMU
+    if (IMU_ENABLE_LA) {
+        bno085_disable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION);
+        ESP_LOGI(TAG, "IMU LA disabled");  
+    }
+    if (IMU_ENABLE_GRV) {
+        bno085_disable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR);
+        ESP_LOGI(TAG, "IMU GRV disabled");  
+    }
+
+    // stop flash logging
     ESP_ERROR_CHECK(flash_log_stop());
 
-    // start espnow timesync
+    // start espno   s_timesync_state=true;w timesync
     espnow_time_initiator_config_t config = {
         .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
     };
