@@ -85,7 +85,6 @@ static uint                 gcolor=7;
 #define IMU_LOG_PARTITION_LABEL     "imu_log"
 #define IMU_SAMPLE_PERIOD_US        10000   /* 10 ms -> 100 Hz */
 #define FLASH_SECTOR_SIZE           4096u
-#define PARTITION_SIZE              6291456u
 #define SECTOR_MAGIC                0x494D5546u   /* "IMUF" */
 
 
@@ -116,7 +115,6 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
 
-#define SECTORS_PER_PARTITION (PARTITION_SIZE / FLASH_SECTOR_SIZE)
 
 typedef struct {
     uint32_t sectors_written;

@@ -22,69 +22,7 @@ static inline bool seq_is_newer(uint32_t a, uint32_t b)
 {
     return (int32_t)(a - b) > 0;
 }
-
-static void write_sector_to_flash(log_sector_t *sec)
-{
-    const uint8_t *payload = (const uint8_t *)sec + sizeof(sector_header_t);
-
-    sec->header.magic = SECTOR_MAGIC;
-    sec->header.seq   = s_seq++;
-    sec->header.crc32 = esp_rom_crc32_le(0, payload, (uint32_t)sec->header.sample_count * sizeof(imu_sample_t));
-
-    size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
-
-    int64_t t0 = esp_timer_get_time();
-
-    /* Flash can only clear bits via erase; every sector must be erased
-     * before it is reused (this is a ring, so after the first lap every
-     * sector already holds old data). */
-    esp_err_t err = esp_partition_erase_range(s_partition, offset, FLASH_SECTOR_SIZE);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "erase failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
-        s_stats.sectors_erase_failed++;
-        goto advance;
-    }
-
-    /* Single write call for the whole sector (header + payload together)
-     * -- this is the fastest available IDF path for raw partition I/O:
-     * esp_partition_write() maps directly onto the underlying
-     * spi_flash_write(), with no filesystem indirection. */
-    err = esp_partition_write(s_partition, offset, sec, FLASH_SECTOR_SIZE);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "write failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
-        s_stats.sectors_write_failed++;
-        goto advance;
-    }
-
-    s_stats.sectors_written++;
-    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
-              s_next_sector, sec->header.seq, sec->header.sample_count,
-              (long long)(esp_timer_get_time() - t0));
-
-advance:
-    s_next_sector++;
-    if (s_next_sector >= s_total_sectors) {
-        s_next_sector = 0;
-        s_stats.wrap_count++;
-    }
-    s_stats.next_sector = s_next_sector;
-    s_stats.next_seq     = s_seq;
-}
-
-static void flash_task(void *arg)
-{
-    uint8_t idx;
-    for (;;) {
-        if (xQueueReceive(s_flush_q, &idx, portMAX_DELAY) == pdTRUE) {
-            write_sector_to_flash(&s_buf[idx]);
-            /* Buffer is now free for the sampler to reuse. */
-            taskENTER_CRITICAL(&s_mux);
-            s_buf[idx].header.sample_count = 0;
-            taskEXIT_CRITICAL(&s_mux);
-        }
-    }
-}
-                                           
+                                         
 esp_err_t init_flash(void) {
 
     s_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, IMU_LOG_PARTITION_LABEL);
@@ -121,8 +59,6 @@ esp_err_t flash_log_start(void)
 }
 
 esp_err_t flash_log_stop(void) {
-
-    //vTaskDelete(&s_writer_task);
     ESP_LOGI(TAG, "flashlog stoped");
     return ESP_OK;
 }
@@ -163,6 +99,73 @@ esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_409
     }
     return esp_partition_read(s_partition, (size_t)sector_index * FLASH_SECTOR_SIZE,  out_buf_4096_bytes, FLASH_SECTOR_SIZE);
 }
+
+static void write_sector_to_flash(log_sector_t *sec)
+{
+    const uint8_t *payload = (const uint8_t *)sec + sizeof(sector_header_t);
+
+    sec->header.magic = SECTOR_MAGIC;
+    sec->header.seq   = s_seq++;
+    sec->header.crc32 = esp_rom_crc32_le(0, payload, (uint32_t)sec->header.sample_count * sizeof(imu_sample_t));
+
+    size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
+
+    int64_t t0 = esp_timer_get_time();
+
+    /* Flash can only clear bits via erase; every sector must be erased
+     * before it is reused (this is a ring, so after the first lap every
+     * sector already holds old data). */
+    esp_err_t err = esp_partition_erase_range(s_partition, offset, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "erase failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_erase_failed++;
+        goto advance;
+    }
+
+    /* Single write call for the whole sector (header + payload together)
+     * -- this is the fastest available IDF path for raw partition I/O:
+     * esp_partition_write() maps directly onto the underlying
+     * spi_flash_write(), with no filesystem indirection. */
+    err = esp_partition_write(s_partition, offset, sec, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "write failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_write_failed++;
+        goto advance;
+    }
+
+    s_stats.sectors_written++;
+    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
+              s_next_sector, 
+              sec->header.seq, 
+              sec->header.sample_count,
+              (long long)(esp_timer_get_time() - t0)
+    );
+
+advance:
+    s_next_sector++;
+    if (s_next_sector >= s_total_sectors) {
+        flash_log_stop();
+        /*s_next_sector = 0;
+        s_stats.wrap_count++;*/
+    }
+    s_stats.next_sector     = s_next_sector;
+    s_stats.next_seq        = s_seq;
+}
+
+static void flash_task(void *arg)
+{
+    uint8_t idx;
+    for (;;) {
+        if (xQueueReceive(s_flush_q, &idx, portMAX_DELAY) == pdTRUE) {
+            write_sector_to_flash(&s_buf[idx]);
+            /* Buffer is now free for the sampler to reuse. */
+            taskENTER_CRITICAL(&s_mux);
+            s_buf[idx].header.sample_count = 0;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+    }
+}
+
 
 
 
@@ -273,6 +276,8 @@ static void timer_task(void *arg)
 }
 
 
+
+
 /* Initialize led strip */
 esp_err_t init_led(void) {
 
@@ -381,11 +386,11 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                
     }
 
-    if ((rate % 194)==0) {
+    /*if ((rate % 194)==0) {
         ns+=1;
         printf("%.4f - %d\n",  (double)1000000/((te-ti)/rate), ns);
-    }
-/*
+    }*/
+
     taskENTER_CRITICAL(&s_mux);
     uint8_t idx = s_active;
     log_sector_t *buf = &s_buf[idx];
@@ -412,8 +417,8 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
         }
     }
     taskEXIT_CRITICAL(&s_mux);
-*/
-   /* if (full_idx != 0xFF) {
+
+    if (full_idx != 0xFF) {
         BaseType_t ok = xQueueSend(s_flush_q, &full_idx, 0);
         if (ok != pdTRUE) {
             // Queue full (writer task starved) -- extremely unlikely
@@ -424,7 +429,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             s_stats.buffer_overruns++;
             taskEXIT_CRITICAL(&s_mux);
         }
-    }*/
+    }
     
 }
 
@@ -471,6 +476,9 @@ void start_imulogs() {
     // stop timesync
     espnow_time_initiator_stop();
 
+    // flash log
+    ESP_ERROR_CHECK(flash_log_start());
+
     // start imu logging
     gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
     s_timesync_state=false;
@@ -480,6 +488,7 @@ void start_imulogs() {
 
 void stop_imulogs() {
     // stop flash logging
+    s_timesync_state=true;
     ESP_ERROR_CHECK(flash_log_stop());
 
     // start espnow timesync
@@ -487,7 +496,6 @@ void stop_imulogs() {
         .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
     };
     espnow_time_initiator_start(&config);
-    s_timesync_state=true;
 
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
@@ -538,6 +546,5 @@ void app_main()
     ESP_LOGI(TAG, "Master ready - broadcasting every %d ms, blinking every %llu us",
              TIMESYNC_BROADCAST_INTERVAL_MS, gptimer_period);
 
-    vTaskDelay(2000);
-    start_imulogs();
+    
 }
