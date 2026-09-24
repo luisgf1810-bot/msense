@@ -2,6 +2,7 @@
 #define IMU_STRUCT_H
 
 #include <inttypes.h>
+#include "bno085.h"
 
 typedef enum __attribute__((packed)) {
     BNO_TYPE_EMPTY = 0,
@@ -31,6 +32,20 @@ typedef struct __attribute__((packed)) {
         GameRotation_t game_rotation;  // 16 bytes
     }; // Union (16 bytes)
 } imu_sample_t; // 21 bytes (No padding!)
+
+
+#define SENS_ON_PIN                 18U
+#define IMU_WAKEUP_PIN              7U
+#define IMU_LA_SAMPLING_RATE_HZ     10000
+#define IMU_GRV_SAMPLING_RATE_HZ    (IMU_LA_SAMPLING_RATE_HZ*5)
+#define IMU_ENABLE_GRV              false
+#define IMU_ENABLE_LA               true
+
+
+
+static uint64_t                 ti=0, te=0;
+static uint32_t                 rate=0;
+static bno085_handle_t          bno085;
 
 
 #endif

@@ -39,29 +39,12 @@
 #include "led_strip.h"
 #include "ble_control.h"
 #include "imu.h"
-#include "bno085.h"
 
 
 
 
 // Logs
 const char *TAG = "MAIN";
-
-
-// IMU
-#define SENS_ON_PIN                 18U
-#define MOTION_WAKEUP_PIN           7U
-#define IMU_LA_SAMPLING_RATE_HZ     5000
-#define IMU_GRV_SAMPLING_RATE_HZ    (IMU_LA_SAMPLING_RATE_HZ*5)
-
-
-
-static uint64_t                 ti=0, te=0;
-static uint32_t                 rate=0;
-static bno085_handle_t          bno085;
-
-
-
 
 
 // TIMER
@@ -102,6 +85,7 @@ static uint                 gcolor=7;
 #define IMU_LOG_PARTITION_LABEL     "imu_log"
 #define IMU_SAMPLE_PERIOD_US        10000   /* 10 ms -> 100 Hz */
 #define FLASH_SECTOR_SIZE           4096u
+#define PARTITION_SIZE              6291456u
 #define SECTOR_MAGIC                0x494D5546u   /* "IMUF" */
 
 
@@ -132,6 +116,7 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
 
+#define SECTORS_PER_PARTITION (PARTITION_SIZE / FLASH_SECTOR_SIZE)
 
 typedef struct {
     uint32_t sectors_written;
@@ -151,17 +136,19 @@ typedef struct {
  * other is either idle (already flushed) or being written by the
  * writer task. Exactly one of {s_buf[0], s_buf[1]} is "active" at a
  * time; the other is either empty or in flight to flash. */
-static log_sector_t s_buf[2];
 
-static const esp_partition_t *s_partition;
-static uint32_t s_total_sectors;
-static volatile uint8_t s_active = 0;
-static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static QueueHandle_t   s_flush_q;      /* holds indices (0/1) of full buffers */
-static TaskHandle_t    s_writer_task;
-static uint32_t s_next_sector;
-static uint32_t s_seq;
-static imu_log_stats_t s_stats;
+static portMUX_TYPE             s_mux = portMUX_INITIALIZER_UNLOCKED;
+static QueueHandle_t            s_flush_q;      /* holds indices (0/1) of full buffers */
+static TaskHandle_t             s_writer_task;
+static const esp_partition_t    *s_partition;
+static volatile uint8_t         s_active = 0;
+static log_sector_t             s_buf[2];
+
+static uint32_t                 s_total_sectors=0;
+static uint32_t                 s_next_sector;
+static uint32_t                 s_seq;
+static imu_log_stats_t          s_stats;
+static uint16_t                 ns=0;
 
 
 

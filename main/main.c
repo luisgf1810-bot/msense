@@ -353,12 +353,6 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.game_rotation.j      = value->data.game_rotation_vector.j;
             sample.game_rotation.k      = value->data.game_rotation_vector.k;
             sample.game_rotation.real   = value->data.game_rotation_vector.real;
-            if ((rate % 194)==0) {
-                    led_strip_set_pixel(s_led_strip, 0, 0, 0, 7); 
-                    led_strip_refresh(s_led_strip);
-                    vTaskDelay(1);
-                    led_strip_clear(s_led_strip);
-            }
             /*printf("(%.4f)%.4f,%.4f,%.4f,%.4f\n",
                     1000000/((te-ti)/rate),
                     value->data.game_rotation_vector.i, 
@@ -374,12 +368,6 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.linear_accel.x       = value->data.linear_acceleration.x;
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
-            if ((rate % 194)==0) {
-                    led_strip_set_pixel(s_led_strip, 0, 0, 0, 87); 
-                    led_strip_refresh(s_led_strip);
-                    vTaskDelay(1);
-                    led_strip_clear(s_led_strip);
-            }
             /*printf("(%.4f)%.4f,%.4f,%.4f\n",
                     1000000/((te-ti)/rate),
                     value->data.linear_acceleration.x, 
@@ -393,6 +381,10 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                
     }
 
+    if ((rate % 194)==0) {
+        ns+=1;
+        printf("%.4f - %d\n",  (double)1000000/((te-ti)/rate), ns);
+    }
 /*
     taskENTER_CRITICAL(&s_mux);
     uint8_t idx = s_active;
@@ -462,10 +454,15 @@ esp_err_t init_imu() {
     // Initialize BNO085
     ESP_ERROR_CHECK(bno085_init(NULL, i2c_dev, GPIO_NUM_7, GPIO_NUM_18, &bno085));  
     bno085_register_sensor_callback(bno085, on_sensor_data, NULL);
-    bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);  
-    //bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ); 
-
-    ESP_LOGI(TAG, "IMU initialized, GRV:%d hz, LA:%d hz", IMU_GRV_SAMPLING_RATE_HZ, IMU_LA_SAMPLING_RATE_HZ ); 
+    if (IMU_ENABLE_LA) {
+        bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);
+        ESP_LOGI(TAG, "IMU initialized, LA:%d hz", IMU_LA_SAMPLING_RATE_HZ );  
+    }
+    if (IMU_ENABLE_GRV) {
+        bno085_enable_sensor(bno085, BNO085_SENSOR_GAME_ROTATION_VECTOR, IMU_GRV_SAMPLING_RATE_HZ);
+        ESP_LOGI(TAG, "IMU initialized, GRV:%d hz", IMU_GRV_SAMPLING_RATE_HZ );  
+    }
+    
 
     return ESP_OK;
 }
@@ -540,4 +537,7 @@ void app_main()
 
     ESP_LOGI(TAG, "Master ready - broadcasting every %d ms, blinking every %llu us",
              TIMESYNC_BROADCAST_INTERVAL_MS, gptimer_period);
+
+    vTaskDelay(2000);
+    start_imulogs();
 }
