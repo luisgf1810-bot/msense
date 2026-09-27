@@ -6,13 +6,10 @@ idf_component_register(
 
     PRIV_REQUIRES   spi_flash 
                     nvs_flash
-                    esp_rom 
-                    esp_hw_support
                     esp_timer
                     esp_driver_gptimer
                     esp_event 
                     esp_wifi
-                    esp_netif
                     esp_driver_gpio 
                     esp_driver_i2c  
                     esp_partition

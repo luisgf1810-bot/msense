@@ -49,7 +49,7 @@ const char *TAG = "MAIN";
 
 // TIMER
 #define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BLINK_HZ       (5000000ULL)
+#define TIMESYNC_BLINK_HZ       (4000000ULL)
 
 static bool                     s_timesync_state    = true;
 static TaskHandle_t             s_gptimer_task      = NULL;

@@ -323,8 +323,7 @@ esp_err_t init_ble(void)
 
     // Set GAP device name
     ble_svc_gap_device_name_set(DEVICE_NAME);
-/* Library function declarations */
-void ble_store_config_init(void)            ;
+
     /* Set host callbacks */
     ble_hs_cfg.sync_cb  = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
