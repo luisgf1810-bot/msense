@@ -49,15 +49,15 @@ const char *TAG = "MAIN";
 
 // TIMER
 #define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BLINK_HZ       (3000000ULL)
+#define TIMESYNC_BLINK_HZ       (5000000ULL)
 
-static bool                     s_timesync_state   = true;
+static bool                     s_timesync_state    = true;
 static TaskHandle_t             s_gptimer_task      = NULL;
-static gptimer_handle_t         s_gptimer      = NULL;
-static QueueHandle_t            s_gptimer_evt_q  = NULL;
-static portMUX_TYPE             s_gptimer_lock  = portMUX_INITIALIZER_UNLOCKED;
-static uint64_t                 gptimer_period=TIMESYNC_BLINK_HZ;
-static volatile bool            s_timer_started = false;
+static gptimer_handle_t         s_gptimer           = NULL;
+static QueueHandle_t            s_gptimer_evt_q     = NULL;
+static portMUX_TYPE             s_gptimer_lock      = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t                 gptimer_period      = TIMESYNC_BLINK_HZ;
+static volatile bool            s_timer_started     = false;
 
 
 
@@ -76,7 +76,7 @@ static uint                 gcolor=7;
 // ESPNOW TIMESYNC
 
 #define TIMESYNC_BROADCAST_INTERVAL_MS 2000
-
+#define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
 
 // FLASH Log
@@ -147,6 +147,57 @@ static uint32_t                 s_next_sector;
 static uint32_t                 s_seq;
 static imu_log_stats_t          s_stats;
 static uint16_t                 ns=0;
+
+
+
+/*  Battery */
+esp_err_t init_battery() ;
+
+/* Initialize led strip */
+esp_err_t init_led(void) ;
+
+/* Initialize Wi-Fi & ESP-NOW TIME Sync */
+esp_err_t init_espnow_timesync(void) ;
+
+/* GPTimer Init and ISR Callback  */
+static uint64_t ticks_to_next_boundary(uint64_t phase_now);
+static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx);
+esp_err_t init_gptimer(uint64_t phase_now) ;
+esp_err_t gptimer_arm_next(uint64_t phase_now);
+static void timer_task(void *arg);
+
+
+/* IMU  */
+static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx);
+esp_err_t init_imu() ;
+
+
+/* Flash functions */
+static inline bool seq_is_newer(uint32_t a, uint32_t b);
+void imu_flash_log_get_stats(imu_log_stats_t *out);
+esp_err_t init_flash(void) ;
+esp_err_t flash_log_start(void);
+esp_err_t flash_log_stop(void) ;
+esp_err_t imu_flash_log_flush_partial(void);
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
+static void write_sector_to_flash(log_sector_t *sec);
+
+
+/* Flash functions */
+static inline bool seq_is_newer(uint32_t a, uint32_t b);
+void imu_flash_log_get_stats(imu_log_stats_t *out);
+esp_err_t init_flash(void);
+esp_err_t flash_log_start(void);
+esp_err_t flash_log_stop(void);
+esp_err_t imu_flash_log_flush_partial(void);
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
+static void write_sector_to_flash(log_sector_t *sec);
+static void flash_task(void *arg);
+
+
+/* BLE Commands */
+void start_imulogs() ;
+void stop_imulogs() ;
 
 
 

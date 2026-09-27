@@ -1,175 +1,77 @@
 #include "main.h"
 
-#define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
-
-
-
 
 
 /*  Battery */
-
 esp_err_t init_battery() {
   
     return ESP_OK;
 }
 
 
+/* Initialize led strip */
+esp_err_t init_led(void) {
 
+    // Enable the power supply to the LED Strip 
+    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_SLP_PIN, 1);
 
-/* --- Flash functions --- */
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_PIN,
+        .max_leds = LED_STRIP_NUM_PIXELS,
+        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        .flags.invert_out = false,
+    };
 
-static inline bool seq_is_newer(uint32_t a, uint32_t b)
-{
-    return (int32_t)(a - b) > 0;
-}
-                                         
-esp_err_t init_flash(void) {
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src       = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip));
+    led_strip_clear(s_led_strip);
 
-    s_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, IMU_LOG_PARTITION_LABEL);
-    if (!s_partition) {
-        ESP_LOGE(TAG, "partition '%s' not found -- check partitions.csv", IMU_LOG_PARTITION_LABEL);
-        return ESP_ERR_NOT_FOUND;
-    }
-    if (s_partition->size % FLASH_SECTOR_SIZE != 0) {
-        ESP_LOGE(TAG, "partition size must be a multiple of %u bytes", FLASH_SECTOR_SIZE);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    s_total_sectors = (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE);
-    memset(s_buf, 0, sizeof(s_buf));
-    memset(&s_stats, 0, sizeof(s_stats));
-    s_stats.total_sectors = s_total_sectors;
-
-    ESP_LOGI(TAG, "partition '%s': %u bytes, %" PRIu32 " sectors, %u samples/sector",
-                s_partition->label, (unsigned)s_partition->size, s_total_sectors,
-                (unsigned)SAMPLES_PER_SECTOR);
+    ESP_LOGI(TAG, "LED initialized"); 
 
     return ESP_OK;
 }
 
-esp_err_t flash_log_start(void)
-{
-   
-    s_next_sector = 0;
-    s_seq = 0;
-    s_stats.next_sector = s_next_sector;
-    s_stats.next_seq    = s_seq;
+
+
+/* Initialize Wi-Fi & ESP-NOW TIME Sync */
+esp_err_t init_espnow_timesync(void) {
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_start());
+    ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
+    espnow_config.qsize = 32;
+    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
+
+
+    // Start as time initiator (controller)
+    espnow_time_initiator_config_t config = {
+        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
+    };
+    espnow_time_initiator_start(&config);
+
+    ESP_LOGI(TAG, "ESPNOW TIMESYNC initialized"); 
 
     return ESP_OK;
 }
 
-esp_err_t flash_log_stop(void) {
-    ESP_LOGI(TAG, "flashlog stoped");
-    return ESP_OK;
-}
-
-esp_err_t imu_flash_log_flush_partial(void)
-{
-    uint8_t idx;
-    uint16_t count;
-
-    taskENTER_CRITICAL(&s_mux);
-    idx = s_active;
-    count = s_buf[idx].header.sample_count;
-    if (count > 0) {
-        uint8_t other = 1 - idx;
-        s_active = other; /* stop new samples from landing in idx */
-    }
-    taskEXIT_CRITICAL(&s_mux);
-
-    if (count == 0) {
-        return ESP_OK; /* nothing pending */
-    }
-    xQueueSend(s_flush_q, &idx, portMAX_DELAY);
-    return ESP_OK;
-}
-
-void imu_flash_log_get_stats(imu_log_stats_t *out)
-{
-    if (!out) return;
-    taskENTER_CRITICAL(&s_mux);
-    *out = s_stats;
-    taskEXIT_CRITICAL(&s_mux);
-}
-
-esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes)
-{
-    if (sector_index >= s_total_sectors) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return esp_partition_read(s_partition, (size_t)sector_index * FLASH_SECTOR_SIZE,  out_buf_4096_bytes, FLASH_SECTOR_SIZE);
-}
-
-static void write_sector_to_flash(log_sector_t *sec)
-{
-    const uint8_t *payload = (const uint8_t *)sec + sizeof(sector_header_t);
-
-    sec->header.magic = SECTOR_MAGIC;
-    sec->header.seq   = s_seq++;
-    sec->header.crc32 = esp_rom_crc32_le(0, payload, (uint32_t)sec->header.sample_count * sizeof(imu_sample_t));
-
-    size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
-
-    int64_t t0 = esp_timer_get_time();
-
-    /* Flash can only clear bits via erase; every sector must be erased
-     * before it is reused (this is a ring, so after the first lap every
-     * sector already holds old data). */
-    esp_err_t err = esp_partition_erase_range(s_partition, offset, FLASH_SECTOR_SIZE);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "erase failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
-        s_stats.sectors_erase_failed++;
-        goto advance;
-    }
-
-    /* Single write call for the whole sector (header + payload together)
-     * -- this is the fastest available IDF path for raw partition I/O:
-     * esp_partition_write() maps directly onto the underlying
-     * spi_flash_write(), with no filesystem indirection. */
-    err = esp_partition_write(s_partition, offset, sec, FLASH_SECTOR_SIZE);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "write failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
-        s_stats.sectors_write_failed++;
-        goto advance;
-    }
-
-    s_stats.sectors_written++;
-    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
-              s_next_sector, 
-              sec->header.seq, 
-              sec->header.sample_count,
-              (long long)(esp_timer_get_time() - t0)
-    );
-
-advance:
-    s_next_sector++;
-    if (s_next_sector >= s_total_sectors) {
-        stop_imulogs();
-        /*s_next_sector = 0;
-        s_stats.wrap_count++;*/
-    }
-    s_stats.next_sector     = s_next_sector;
-    s_stats.next_seq        = s_seq;
-}
-
-static void flash_task(void *arg)
-{
-    uint8_t idx;
-    for (;;) {
-        if (xQueueReceive(s_flush_q, &idx, portMAX_DELAY) == pdTRUE) {
-            write_sector_to_flash(&s_buf[idx]);
-            /* Buffer is now free for the sampler to reuse. */
-            taskENTER_CRITICAL(&s_mux);
-            s_buf[idx].header.sample_count = 0;
-            taskEXIT_CRITICAL(&s_mux);
-        }
-    }
-}
 
 
 
-
-/* --- GPTimer Init and ISR Callback --- */
+/* GPTimer Init and ISR Callback  */
 
 static uint64_t ticks_to_next_boundary(uint64_t phase_now)
 {
@@ -278,68 +180,9 @@ static void timer_task(void *arg)
 
 
 
-/* Initialize led strip */
-esp_err_t init_led(void) {
-
-    // Enable the power supply to the LED Strip 
-    gpio_set_direction(LED_SLP_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_SLP_PIN, 1);
-
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_PIN,
-        .max_leds = LED_STRIP_NUM_PIXELS,
-        .led_model = LED_MODEL_SK6812, // SK6805 shares close timing with SK6812/WS2812
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src       = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000,
-        .flags.with_dma = false,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip));
-    led_strip_clear(s_led_strip);
-
-    ESP_LOGI(TAG, "LED initialized"); 
-
-    return ESP_OK;
-}
 
 
-
-/* --- Initialize Wi-Fi & ESP-NOW TIME Sync --- */
-esp_err_t init_espnow_timesync(void) {
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_start());
-    ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
-    espnow_config.qsize = 32;
-    ESP_ERROR_CHECK( espnow_init(&espnow_config) );
-
-
-    // Start as time initiator (controller)
-    espnow_time_initiator_config_t config = {
-        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
-    };
-    espnow_time_initiator_start(&config);
-
-    ESP_LOGI(TAG, "ESPNOW TIMESYNC initialized"); 
-
-    return ESP_OK;
-}
-
-
-
-/* --- IMU  --- */
+/* IMU  */
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx)
 {
 
@@ -465,6 +308,174 @@ esp_err_t init_imu() {
     return ESP_OK;
 }
 
+
+
+
+/* Flash functions */
+static inline bool seq_is_newer(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) > 0;
+}
+ 
+void imu_flash_log_get_stats(imu_log_stats_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_mux);
+    *out = s_stats;
+    taskEXIT_CRITICAL(&s_mux);
+}
+
+esp_err_t init_flash(void) {
+
+    s_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, IMU_LOG_PARTITION_LABEL);
+    if (!s_partition) {
+        ESP_LOGE(TAG, "partition '%s' not found -- check partitions.csv", IMU_LOG_PARTITION_LABEL);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (s_partition->size % FLASH_SECTOR_SIZE != 0) {
+        ESP_LOGE(TAG, "partition size must be a multiple of %u bytes", FLASH_SECTOR_SIZE);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+
+    return ESP_OK;
+}
+
+esp_err_t flash_log_start(void)
+{
+   
+    s_total_sectors = (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE);
+    memset(s_buf, 0, sizeof(s_buf));
+    memset(&s_stats, 0, sizeof(s_stats));
+    s_stats.total_sectors = s_total_sectors;
+
+    ESP_LOGI(TAG, "partition '%s': %u bytes, %" PRIu32 " sectors, %u samples/sector",
+                s_partition->label, (unsigned)s_partition->size, s_total_sectors,
+                (unsigned)SAMPLES_PER_SECTOR);
+
+    s_next_sector = 0;
+    s_seq = 0;
+    s_stats.next_sector = s_next_sector;
+    s_stats.next_seq    = s_seq;
+
+    return ESP_OK;
+}
+
+esp_err_t flash_log_stop(void) {
+
+    imu_log_stats_t stats;
+    imu_flash_log_get_stats(&stats);
+
+    ESP_LOGI(TAG,
+                 "sectors_written=%" PRIu32 " next_sector=%" PRIu32 "/%" PRIu32
+                 " seq=%" PRIu32 " wraps=%" PRIu32
+                 " overruns=%" PRIu32 " erase_fail=%" PRIu32 " write_fail=%" PRIu32,
+                 stats.sectors_written, stats.next_sector, stats.total_sectors,
+                 stats.next_seq, stats.wrap_count, stats.buffer_overruns,
+                 stats.sectors_erase_failed, stats.sectors_write_failed);
+
+    return ESP_OK;
+}
+
+esp_err_t imu_flash_log_flush_partial(void)
+{
+    uint8_t idx;
+    uint16_t count;
+
+    taskENTER_CRITICAL(&s_mux);
+    idx = s_active;
+    count = s_buf[idx].header.sample_count;
+    if (count > 0) {
+        uint8_t other = 1 - idx;
+        s_active = other; /* stop new samples from landing in idx */
+    }
+    taskEXIT_CRITICAL(&s_mux);
+
+    if (count == 0) {
+        return ESP_OK; /* nothing pending */
+    }
+    xQueueSend(s_flush_q, &idx, portMAX_DELAY);
+    return ESP_OK;
+}
+
+esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes)
+{
+    if (sector_index >= s_total_sectors) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_partition_read(s_partition, (size_t)sector_index * FLASH_SECTOR_SIZE,  out_buf_4096_bytes, FLASH_SECTOR_SIZE);
+}
+
+static void write_sector_to_flash(log_sector_t *sec)
+{
+    const uint8_t *payload = (const uint8_t *)sec + sizeof(sector_header_t);
+
+    sec->header.magic = SECTOR_MAGIC;
+    sec->header.seq   = s_seq++;
+    sec->header.crc32 = esp_rom_crc32_le(0, payload, (uint32_t)sec->header.sample_count * sizeof(imu_sample_t));
+
+    size_t offset = (size_t)s_next_sector * FLASH_SECTOR_SIZE;
+
+    int64_t t0 = esp_timer_get_time();
+
+    /* Flash can only clear bits via erase; every sector must be erased
+     * before it is reused (this is a ring, so after the first lap every
+     * sector already holds old data). */
+    esp_err_t err = esp_partition_erase_range(s_partition, offset, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "erase failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_erase_failed++;
+        goto advance;
+    }
+
+    /* Single write call for the whole sector (header + payload together)
+     * -- this is the fastest available IDF path for raw partition I/O:
+     * esp_partition_write() maps directly onto the underlying
+     * spi_flash_write(), with no filesystem indirection. */
+    err = esp_partition_write(s_partition, offset, sec, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "write failed @ sector %" PRIu32 ": %s", s_next_sector, esp_err_to_name(err));
+        s_stats.sectors_write_failed++;
+        goto advance;
+    }
+
+    s_stats.sectors_written++;
+    ESP_LOGI(TAG, "sector %" PRIu32 " (seq %" PRIu32 ", %u samples) written in %lld us",
+              s_next_sector, 
+              sec->header.seq, 
+              sec->header.sample_count,
+              (long long)(esp_timer_get_time() - t0)
+    );
+
+advance:
+    s_next_sector++;
+    if (s_next_sector >= s_total_sectors) {
+        stop_imulogs();
+    }
+    s_stats.next_sector     = s_next_sector;
+    s_stats.next_seq        = s_seq;
+}
+
+static void flash_task(void *arg)
+{
+    uint8_t idx;
+    for (;;) {
+        if (xQueueReceive(s_flush_q, &idx, portMAX_DELAY) == pdTRUE) {
+            write_sector_to_flash(&s_buf[idx]);
+            /* Buffer is now free for the sampler to reuse. */
+            taskENTER_CRITICAL(&s_mux);
+            s_buf[idx].header.sample_count = 0;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+    }
+}
+
+
+
+
+
+
+/* BLE Commands */
 void start_imulogs() {
     // stop timesync
     espnow_time_initiator_stop();
@@ -515,6 +526,10 @@ void stop_imulogs() {
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
 }
+
+
+
+
 
 
 
