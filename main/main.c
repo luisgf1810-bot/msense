@@ -39,23 +39,62 @@ esp_err_t init_led(void) {
 
 
 
-/* Initialize Wi-Fi & ESP-NOW TIME Sync */
-esp_err_t init_espnow_timesync(void) {
+/* Initialize/Stop Wi-Fi & ESP-NOW TIME Sync */
 
-    ESP_ERROR_CHECK(esp_netif_init());
+esp_err_t init_stack(void) {
+
+    
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    return ESP_OK;
+}
+
+esp_err_t start_wifi(void) {
+
+    // start wifi
+    ESP_ERROR_CHECK(esp_netif_init());
+    sta_netif = esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start());
     ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE));
 
+    ESP_LOGI(TAG, "WiFi initialized"); 
+
+    return ESP_OK;
+}
+
+esp_err_t stop_wifi(void) {
+
+    if (s_timesync_state==true) {
+
+        // stop timesync
+        espnow_time_initiator_stop();
+
+        ESP_ERROR_CHECK(esp_wifi_disconnect());
+        ESP_ERROR_CHECK(esp_wifi_stop());
+        ESP_ERROR_CHECK(esp_wifi_deinit());
+
+        if (sta_netif != NULL) {
+            esp_netif_destroy_default_wifi(sta_netif);
+            sta_netif = NULL; 
+        }
+    }
+
+    ESP_LOGI(TAG, "WiFi stopped"); 
+
+    return ESP_OK;
+}
+
+esp_err_t start_espnow_timesync(void) {
+
+    // start espnow
     espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
     espnow_config.qsize = 32;
     ESP_ERROR_CHECK( espnow_init(&espnow_config) );
-
 
     // Start as time initiator (controller)
     espnow_time_initiator_config_t config = {
@@ -68,7 +107,14 @@ esp_err_t init_espnow_timesync(void) {
     return ESP_OK;
 }
 
+esp_err_t stop_espnow_timesync(void) {
 
+    espnow_time_initiator_stop();
+
+    ESP_LOGI(TAG, "ESPNOW TIMESYNC stopped"); 
+
+    return ESP_OK;
+}
 
 
 /* GPTimer Init and ISR Callback  */
@@ -477,8 +523,6 @@ static void flash_task(void *arg)
 
 /* BLE Commands */
 void start_imulogs() {
-    // stop timesync
-    espnow_time_initiator_stop();
 
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
@@ -494,15 +538,19 @@ void start_imulogs() {
 
     // start imu logging
     gptimer_period=IMU_LA_SAMPLING_RATE_HZ;
+
+    // stop timesync espnow
+    ESP_ERROR_CHECK(stop_espnow_timesync());
     s_timesync_state=false;
+
+    // stop wifi
+    ESP_ERROR_CHECK(stop_wifi());
 
     ti=esp_timer_get_time();
     te=rate=0;
 }   
 
 void stop_imulogs() {
-
-    s_timesync_state=true;
 
     // disable IMU
     if (IMU_ENABLE_LA) {
@@ -517,11 +565,13 @@ void stop_imulogs() {
     // stop flash logging
     ESP_ERROR_CHECK(flash_log_stop());
 
-    // start espno   s_timesync_state=true;w timesync
-    espnow_time_initiator_config_t config = {
-        .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
-    };
-    espnow_time_initiator_start(&config);
+
+    // start wifi
+    ESP_ERROR_CHECK(start_wifi());
+
+    // start espnow timesync
+    s_timesync_state=true;
+    ESP_ERROR_CHECK(start_espnow_timesync());
 
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
@@ -567,7 +617,9 @@ void app_main()
     // SetUp
     ESP_ERROR_CHECK(init_battery());
     ESP_ERROR_CHECK(init_led());
-    ESP_ERROR_CHECK(init_espnow_timesync());
+    ESP_ERROR_CHECK(init_stack());
+    ESP_ERROR_CHECK(start_wifi());
+    ESP_ERROR_CHECK(start_espnow_timesync());
     ESP_ERROR_CHECK(init_gptimer(esp_timer_get_time()));
     ESP_ERROR_CHECK(init_imu());
     ESP_ERROR_CHECK(init_flash());
