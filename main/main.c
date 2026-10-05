@@ -42,9 +42,9 @@ esp_err_t init_led(void) {
 /* Initialize/Stop Wi-Fi & ESP-NOW TIME Sync */
 
 esp_err_t init_stack(void) {
-
     
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_netif_init());
 
     return ESP_OK;
 }
@@ -52,7 +52,6 @@ esp_err_t init_stack(void) {
 esp_err_t start_wifi(void) {
 
     // start wifi
-    ESP_ERROR_CHECK(esp_netif_init());
     sta_netif = esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
@@ -69,10 +68,7 @@ esp_err_t start_wifi(void) {
 
 esp_err_t stop_wifi(void) {
 
-    if (s_timesync_state==true) {
-
-        // stop timesync
-        espnow_time_initiator_stop();
+    if (s_timesync_state==false) {
 
         ESP_ERROR_CHECK(esp_wifi_disconnect());
         ESP_ERROR_CHECK(esp_wifi_stop());
@@ -100,7 +96,7 @@ esp_err_t start_espnow_timesync(void) {
     espnow_time_initiator_config_t config = {
         .sync_interval_ms = TIMESYNC_BROADCAST_INTERVAL_MS,  
     };
-    espnow_time_initiator_start(&config);
+    ESP_ERROR_CHECK(espnow_time_initiator_start(&config));
 
     ESP_LOGI(TAG, "ESPNOW TIMESYNC initialized"); 
 
@@ -109,7 +105,8 @@ esp_err_t start_espnow_timesync(void) {
 
 esp_err_t stop_espnow_timesync(void) {
 
-    espnow_time_initiator_stop();
+    ESP_ERROR_CHECK(espnow_time_initiator_stop());
+    ESP_ERROR_CHECK(espnow_deinit());
 
     ESP_LOGI(TAG, "ESPNOW TIMESYNC stopped"); 
 
