@@ -114,6 +114,7 @@ esp_err_t stop_espnow_timesync(void) {
 }
 
 
+
 /* GPTimer Init and ISR Callback  */
 
 static uint64_t ticks_to_next_boundary(uint64_t phase_now)
