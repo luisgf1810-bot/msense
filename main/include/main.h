@@ -159,6 +159,7 @@ esp_err_t init_battery() ;
 
 /* Initialize led strip */
 esp_err_t init_led(void) ;
+void tilt_led(void) ;
 
 /* Initialize Wi-Fi & ESP-NOW TIME Sync */
 esp_err_t init_stack(void);

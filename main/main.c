@@ -9,6 +9,8 @@ esp_err_t init_battery() {
 }
 
 
+
+
 /* Initialize led strip */
 esp_err_t init_led(void) {
 
@@ -37,6 +39,19 @@ esp_err_t init_led(void) {
     return ESP_OK;
 }
 
+void tilt_led() {
+
+    led_strip_set_pixel(s_led_strip, 0, 7, 0, 0); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_set_pixel(s_led_strip, 0, 0, 7, 0); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_set_pixel(s_led_strip, 0, 0, 0, 7); 
+    led_strip_refresh(s_led_strip);
+    vTaskDelay(150);
+    led_strip_clear(s_led_strip);
+}
 
 
 /* Initialize/Stop Wi-Fi & ESP-NOW TIME Sync */
@@ -112,6 +127,8 @@ esp_err_t stop_espnow_timesync(void) {
 
     return ESP_OK;
 }
+
+
 
 
 
@@ -522,6 +539,10 @@ static void flash_task(void *arg)
 /* BLE Commands */
 void start_imulogs() {
 
+    tilt_led();
+    tilt_led();
+    tilt_led();
+
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
 
@@ -549,6 +570,10 @@ void start_imulogs() {
 }   
 
 void stop_imulogs() {
+
+    tilt_led();
+    tilt_led();
+    tilt_led();
 
     // disable IMU
     if (IMU_ENABLE_LA) {
