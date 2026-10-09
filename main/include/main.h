@@ -27,6 +27,7 @@
 #include "esp_now.h"
 #include "esp_crc.h"
 #include "esp_sleep.h"
+#include "esp_adc/adc_oneshot.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -45,6 +46,31 @@
 
 // Logs
 const char *TAG = "MAIN";
+
+
+// BATTERY
+#define POWER_BAT_RUN 0U
+#define POWER_USB 1U
+#define POWER_INIT 2U
+#define POWER_BAT_LOW 3U
+#define POWER_BAT_FULL 4U
+#define POWER_BAT_CHRG 5U
+#define USB_VOLTAGE 4220
+#define MIN_BATTERY_VOLTAGE 3350
+#define AVRG_FILTER_SIZE 8U
+
+
+static adc_oneshot_unit_handle_t adc1_handle;
+static adc_cali_handle_t adc1_cali_handle;
+static uint16_t _voltage_last = 0xFFU;
+static uint16_t _voltage_avrg[AVRG_FILTER_SIZE] = { 0 };
+uint8_t _voltage_index = 0;
+uint8_t _charge_state = POWER_INIT;
+uint8_t _chrg_counter = 0U;
+uint8_t _lowvoltage_counter = 0;
+uint8_t _power_counter = 250;
+
+
 
 
 // TIMER
@@ -156,6 +182,9 @@ static uint16_t                 ns=0;
 
 /*  Battery */
 esp_err_t init_battery() ;
+int read_voltage_mv(void);
+uint16_t BatteryVoltageRead();
+int get_battery_state(void);
 
 /* Initialize led strip */
 esp_err_t init_led(void) ;

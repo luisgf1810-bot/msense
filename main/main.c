@@ -5,8 +5,154 @@
 /*  Battery */
 esp_err_t init_battery() {
   
+    // 1. Set up Cable indication pin (GPIO 0 as input)
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_0),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+
+    // 2. Initialize ADC1 Unit (Required once before channel configuration)
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    // 3. Set up Battery Voltage Read pin (GPIO 4 / ADC1 Channel 4) with 12 dB attenuation
+    adc_oneshot_chan_cfg_t config = {
+        .atten = ADC_ATTEN_DB_12,  // 11dB equivalent in IDF v5/v6 (0–3.3V range)
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    // On ESP32-C6, GPIO 4 is ADC1_CHANNEL_4
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_4, &config));
+
+
+    // 4. Initialize Calibration (Curve Fitting scheme used on ESP32-C6)
+    adc_cali_curve_fitting_config_t cali_config = {
+        .unit_id = ADC_UNIT_1,
+        .chan = ADC_CHANNEL_4,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cali_config, &adc1_cali_handle));
+
+    uint16_t battery_voltage = (((uint16_t)read_voltage_mv()) * 2U) + 65U;
+
+    if (battery_voltage < USB_VOLTAGE) {
+    } else if (battery_voltage < MIN_BATTERY_VOLTAGE) {
+        ESP_LOGI(TAG, ">> Error: Battery Volotage");
+        _chrg_counter = 0;
+    } else {
+
+    }
+    for (uint8_t vv = 0; vv < AVRG_FILTER_SIZE; vv++) {
+        _voltage_avrg[vv] = battery_voltage;
+    }
+
+    ESP_LOGI(TAG, "Battery initialized with %d mV", BatteryVoltageRead()); 
+
     return ESP_OK;
 }
+
+int read_voltage_mv(void) {
+
+    int voltage_mv = 0;
+
+    // Check handles to prevent passing NULL pointers
+    if (adc1_handle == NULL) {
+        ESP_LOGE(TAG, "ADC unit handle is NULL!");
+        return -1;
+    }
+
+    if (adc1_cali_handle != NULL) {
+        // Safe calibrated read
+        ESP_ERROR_CHECK(adc_oneshot_get_calibrated_result(adc1_handle, adc1_cali_handle, ADC_CHANNEL_4, &voltage_mv));
+    } else {
+        // Fallback: Read raw and manually convert (approximate)
+        int raw_val = 0;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_4, &raw_val));
+        voltage_mv = (raw_val * 3300) / 4095; // Rough 12-bit conversion
+    }
+
+    return voltage_mv;
+}
+
+uint16_t BatteryVoltageRead() {
+
+    uint32_t voltage_avrg_total = 0;
+    
+    _voltage_avrg[_voltage_index] = (((uint16_t)read_voltage_mv()) * 2U) + 65U;
+
+    _voltage_index++;
+    if (_voltage_index >= AVRG_FILTER_SIZE) {
+        _voltage_index = 0;
+    }
+    for (uint8_t vv = 0; vv < AVRG_FILTER_SIZE; vv++) {
+        voltage_avrg_total += _voltage_avrg[vv];
+    }
+    voltage_avrg_total = voltage_avrg_total / AVRG_FILTER_SIZE;
+
+    return ((uint16_t)voltage_avrg_total);
+}
+
+int get_battery_state(void) {
+
+    uint16_t battery_voltage = BatteryVoltageRead();
+
+    if ((battery_voltage > USB_VOLTAGE) || (gpio_get_level(0) == 0)) {
+        if (gpio_get_level(0) == 0) {
+            if (_charge_state != POWER_BAT_CHRG) {
+                _charge_state = POWER_BAT_CHRG;
+                ESP_LOGI(TAG,">> Power Status: Battery is charging");
+            }
+        } else if ((BatteryVoltageRead() > USB_VOLTAGE) && ((_charge_state == POWER_BAT_CHRG) || (_charge_state == POWER_BAT_FULL))) {
+            if (_charge_state != POWER_BAT_FULL) {
+                _charge_state = POWER_BAT_FULL;
+                ESP_LOGI(TAG,">> Power Status: Battery Charged ");
+            }
+        } else if (_charge_state == POWER_INIT) {
+            /*Battery First Time Check*/
+            ESP_LOGI(TAG,">> Power Status: Running from USB Power");
+            _charge_state = POWER_USB;
+        } else {
+            /*USB Cabel connected without battery - Run application*/
+            ESP_LOGI(TAG,">> Power Status: Running from USB Power without battery");
+        }
+    } else {
+        if ((_charge_state == POWER_BAT_FULL) || (_charge_state == POWER_INIT)) {
+            /*Battery has been charged or USB is disconnected*/
+            ESP_LOGI(TAG,">> Power Status: Running from Battery Power");
+            _charge_state = POWER_BAT_RUN; /*Battery is at an operating voltage level*/
+            _chrg_counter = 0;
+            _lowvoltage_counter = 0;
+        } else {
+            if (battery_voltage < MIN_BATTERY_VOLTAGE) {
+                /*Voltage is less than 3.3V or higher than 4.3V*/
+                _charge_state = POWER_BAT_LOW;
+                if (_lowvoltage_counter < 10) {
+                _lowvoltage_counter++;
+                } else {
+                ESP_LOGI(TAG,">> Power Status: Battery Low going to Sleep");
+                _chrg_counter = 0;
+                USBSleep();
+                }
+            } else {
+                _lowvoltage_counter = 0;
+                if (_chrg_counter < 3) {
+                    _chrg_counter++;
+                } else {
+                    _charge_state = POWER_BAT_RUN; /*Battery is at an operating voltage level*/
+                }
+            }
+        }
+    }
+}
+
+
 
 
 
