@@ -103,6 +103,8 @@ int get_battery_state(void) {
 
     uint16_t battery_voltage = BatteryVoltageRead();
 
+    ESP_LOGI(TAG,"battery: %d mV, level: %u", battery_voltage, BatteryLevelRead());
+
     if ((battery_voltage > USB_VOLTAGE) || (gpio_get_level(0) == 0)) {
         if (gpio_get_level(0) == 0) {
             if (_charge_state != POWER_BAT_CHRG) {
@@ -138,7 +140,7 @@ int get_battery_state(void) {
                 } else {
                 ESP_LOGI(TAG,">> Power Status: Battery Low going to Sleep");
                 _chrg_counter = 0;
-                USBSleep();
+                //USBSleep();
                 }
             } else {
                 _lowvoltage_counter = 0;
@@ -150,8 +152,30 @@ int get_battery_state(void) {
             }
         }
     }
+    return _charge_state;
 }
 
+uint8_t BatteryLevelRead() {
+  uint16_t voltage = 0;
+  voltage = ((BatteryVoltageRead() / 8U) - 408U);
+  if (_charge_state == POWER_BAT_CHRG) {
+    _voltage_last = 101;  //Show Charging Icon in MicroLink App
+  } else if (_charge_state == POWER_USB) {
+    _voltage_last = 102;  //Show USB Icon in MicroLink App
+  } else if (_charge_state == POWER_BAT_FULL) {
+    _voltage_last = 100;
+  } else if (_voltage_last <= 1) {
+    _voltage_last = 1;
+  } else if ((voltage <= _voltage_last) && (voltage <= 100)) {
+    _voltage_last = voltage;
+  } else {
+    //Spike Voltage Filter
+  }
+
+  voltage = _voltage_last;
+
+  return (uint8_t)_voltage_last;
+}
 
 
 
@@ -373,7 +397,7 @@ static void timer_task(void *arg)
 
             if (s_timesync_state) {
                 uint64_t tick = now / gptimer_period;
-                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us", tick, now);
+                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us, battery_state = %u", tick, now, get_battery_state());
             }
 
             /* Re-arm the next one-shot alarm right away - the timer

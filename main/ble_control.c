@@ -96,6 +96,31 @@ static void notify_status(void)
     }
 }
 
+
+static int gatt_access_battery(uint16_t conn_handle, uint16_t attr_handle,
+                               struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    uint8_t level = BatteryLevelRead();
+    int rc = os_mbuf_append(ctxt->om, &level, sizeof(level));
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+void ble_notify_battery(void)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    uint8_t level = BatteryLevelRead();
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&level, sizeof(level));
+    if (om) {
+        ble_gatts_notify_custom(s_conn_handle, s_batt_handle, om);
+    }
+}
+
+
 /* -------------------------------------------------------------------- */
 /* GATT service table                                                    */
 /* -------------------------------------------------------------------- */
@@ -117,6 +142,19 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
             { 0 }, /* terminator */
+        },
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0x180F),            /* Battery Service */
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A19),    /* Battery Level */
+                .access_cb = gatt_access_battery,
+                .val_handle = &s_batt_handle,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+            },
+            { 0 },
         },
     },
     { 0 }, /* terminator */

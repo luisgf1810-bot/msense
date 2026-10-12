@@ -74,6 +74,11 @@ static uint8_t  addr_val[6] = {0};
 static uint16_t s_conn_handle   = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_status_handle;
 static bool     s_logging_active = false;
+static uint16_t s_batt_handle;
+
+uint8_t BatteryLevelRead(void);   /* defined in main.c */
+void ble_notify_battery(void);
+
 
 esp_err_t init_ble(void);
 static int gap_event_handler(struct ble_gap_event *event, void *arg); 

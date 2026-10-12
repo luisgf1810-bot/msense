@@ -68,7 +68,7 @@ uint8_t _voltage_index = 0;
 uint8_t _charge_state = POWER_INIT;
 uint8_t _chrg_counter = 0U;
 uint8_t _lowvoltage_counter = 0;
-uint8_t _power_counter = 250;
+
 
 
 
@@ -185,10 +185,15 @@ esp_err_t init_battery() ;
 int read_voltage_mv(void);
 uint16_t BatteryVoltageRead();
 int get_battery_state(void);
+uint8_t BatteryLevelRead();
+
+
 
 /* Initialize led strip */
 esp_err_t init_led(void) ;
 void tilt_led(void) ;
+
+
 
 /* Initialize Wi-Fi & ESP-NOW TIME Sync */
 esp_err_t init_stack(void);
