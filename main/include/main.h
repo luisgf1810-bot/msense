@@ -20,8 +20,10 @@
 #include "esp_log.h"
 #include "esp_partition.h"
 
-#include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_http_server.h"
+
 #include "esp_event.h"
 #include "esp_mac.h"
 #include "esp_now.h"
@@ -98,13 +100,22 @@ static led_strip_handle_t   s_led_strip    = NULL;
 static uint                 gcolor=7;
 
 
+// WiFI
+
+esp_netif_t *sta_netif = NULL;
+esp_netif_t *ap_netif  = NULL;
+
+#define WIFI_AP_SSID       "MASTER-AP"
+#define WIFI_AP_PASS       "12345678"   /* >= 8 chars for WPA2 */
+#define WIFI_AP_CHANNEL    1            /* keep equal to the ESP-NOW channel */
+#define WIFI_AP_MAX_CONN   4
+
 
 // ESPNOW TIMESYNC
 
 #define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
-esp_netif_t *sta_netif = NULL;
 static bool                     s_timesync_state    = true;
 
 
@@ -180,6 +191,10 @@ static uint16_t                 ns=0;
 
 
 
+// HTTP Server
+static httpd_handle_t s_httpd = NULL;
+
+
 /*  Battery */
 esp_err_t init_battery() ;
 int read_voltage_mv(void);
@@ -226,6 +241,12 @@ esp_err_t imu_flash_log_flush_partial(void);
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
 static void write_sector_to_flash(log_sector_t *sec);
 
+
+
+/* HTTP download server */
+esp_err_t start_webserver(void);
+esp_err_t stop_webserver(void);
+static esp_err_t imu_bin_get_handler(httpd_req_t *req);
 
 
 /* BLE Commands */

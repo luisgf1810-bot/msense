@@ -9,7 +9,9 @@ idf_component_register(
                     esp_timer
                     esp_driver_gptimer
                     esp_event 
+                    esp_netif
                     esp_wifi
+                    esp_http_server
                     esp_adc
                     esp_driver_gpio 
                     esp_driver_i2c  
