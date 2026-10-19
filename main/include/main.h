@@ -193,7 +193,9 @@ static uint16_t                 ns=0;
 
 // HTTP Server
 static httpd_handle_t s_httpd = NULL;
-
+esp_err_t start_webserver(void);
+esp_err_t stop_webserver(void);
+uint8_t   ble_status_flags(void);
 
 /*  Battery */
 esp_err_t init_battery() ;
@@ -201,7 +203,6 @@ int read_voltage_mv(void);
 uint16_t BatteryVoltageRead();
 int get_battery_state(void);
 uint8_t BatteryLevelRead();
-
 
 
 /* Initialize led strip */
@@ -212,7 +213,8 @@ void tilt_led(void) ;
 
 /* Initialize Wi-Fi & ESP-NOW TIME Sync */
 esp_err_t init_stack(void);
-esp_err_t start_wifi(void);
+static esp_err_t wifi_enable_ap(void);
+static esp_err_t start_wifi(void);
 esp_err_t stop_wifi(void) ;
 esp_err_t start_espnow_timesync(void);
 esp_err_t stop_espnow_timesync(void) ;
@@ -247,9 +249,9 @@ static void write_sector_to_flash(log_sector_t *sec);
 esp_err_t start_webserver(void);
 esp_err_t stop_webserver(void);
 static esp_err_t imu_bin_get_handler(httpd_req_t *req);
+uint8_t   ble_status_flags(void);
 
-
-/* BLE Commands */
+/* BLE Commands */uint8_t   ble_status_flags(void);
 void start_imulogs() ;
 void stop_imulogs() ;
 

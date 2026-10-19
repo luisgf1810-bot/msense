@@ -57,6 +57,8 @@ static const char *BLETAG = "ble_control";
 typedef enum {
     IMU_BLE_CMD_STOP  = 0x00,
     IMU_BLE_CMD_START = 0x01,
+    IMU_BLE_CMD_HTTP_START = 0x02,
+    IMU_BLE_CMD_HTTP_STOP  = 0x03,
 } imu_ble_cmd_t;
 
 /* ---- 128-bit UUIDs (see ble_control.h for the human-readable form) --- */
@@ -73,7 +75,6 @@ static uint8_t  own_addr_type;
 static uint8_t  addr_val[6] = {0};
 static uint16_t s_conn_handle   = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_status_handle;
-static bool     s_logging_active = false;
 static uint16_t s_batt_handle;
 
 uint8_t BatteryLevelRead(void);   /* defined in main.c */
@@ -88,6 +89,9 @@ void ble_store_config_init(void);
 
 void start_imulogs();
 void stop_imulogs();
+esp_err_t stop_webserver(void);
+esp_err_t start_webserver(void);
+uint8_t   ble_status_flags(void);
 
 #ifdef __cplusplus
 }

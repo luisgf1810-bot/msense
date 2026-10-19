@@ -234,34 +234,69 @@ esp_err_t init_stack(void) {
     return ESP_OK;
 }
 
-esp_err_t start_wifi(void) {
+static esp_err_t wifi_enable_ap(void)
+{
+    if (ap_netif != NULL) {
+        return ESP_OK;                       /* already up */
+    }
 
-    sta_netif = esp_netif_create_default_wifi_sta();
-    ap_netif  = esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_APSTA) );
+    ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == NULL) {
+        return ESP_FAIL;
+    }
 
     wifi_config_t ap_config = {
         .ap = {
             .ssid           = WIFI_AP_SSID,
             .ssid_len       = strlen(WIFI_AP_SSID),
             .channel        = WIFI_AP_CHANNEL,
+            .password       = WIFI_AP_PASS,
             .max_connection = WIFI_AP_MAX_CONN,
-            .authmode       = WIFI_AUTH_OPEN,
+            .authmode       = WIFI_AUTH_WPA2_PSK,
             .pmf_cfg        = { .required = false },
         },
     };
-    ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_AP, &ap_config) );
 
-    ESP_ERROR_CHECK( esp_wifi_start() );
-    ESP_ERROR_CHECK( esp_wifi_set_channel(WIFI_AP_CHANNEL, WIFI_SECOND_CHAN_NONE) );
-    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE) );
+    /* APSTA keeps the STA interface alive, so ESP-NOW time sync keeps running */
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    if (err == ESP_OK) err = esp_wifi_set_channel(WIFI_AP_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
-    ESP_LOGI(TAG, "WiFi initialized (APSTA), AP \"%s\" on ch %d", WIFI_AP_SSID, WIFI_AP_CHANNEL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "enable AP failed: %s", esp_err_to_name(err));
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_netif_destroy_default_wifi(ap_netif);
+        ap_netif = NULL;
+        return err;
+    }
 
+    ESP_LOGI(TAG, "AP enabled: \"%s\" ch %d", WIFI_AP_SSID, WIFI_AP_CHANNEL);
+    return ESP_OK;
+}
+
+static void wifi_disable_ap(void)
+{
+    if (ap_netif == NULL) {
+        return;                              /* nothing to do (also when Wi-Fi is already off) */
+    }
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_netif_destroy_default_wifi(ap_netif);
+    ap_netif = NULL;
+    ESP_LOGI(TAG, "AP disabled, back to STA");
+}
+
+esp_err_t start_wifi(void) {
+
+       sta_netif = esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_start());
+    ESP_ERROR_CHECK( esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE));
+
+    ESP_LOGI(TAG, "WiFi initialized (STA)");
     return ESP_OK;
 }
 
@@ -276,10 +311,6 @@ esp_err_t stop_wifi(void) {
         if (sta_netif != NULL) {
             esp_netif_destroy_default_wifi(sta_netif);
             sta_netif = NULL; 
-        }
-                if (ap_netif != NULL) {
-            esp_netif_destroy_default_wifi(ap_netif);
-            ap_netif = NULL;
         }
     }
 
@@ -731,6 +762,8 @@ static esp_err_t imu_bin_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
+    ESP_LOGI(TAG, "-------> HTTP Req %d", req->uri);
+
     /* Default: only the sectors written in the last run.
      * GET /imu.bin?full=1 -> the whole partition. */
     imu_log_stats_t stats;
@@ -785,18 +818,33 @@ static esp_err_t imu_bin_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-esp_err_t start_webserver(void)
+uint8_t ble_status_flags(void)
 {
+    return (s_timesync_state ? 0x00 : 0x01) | (s_httpd ? 0x02 : 0x00);
+}
+
+esp_err_t start_webserver(void)
+{    
+    if (!s_timesync_state) {
+        ESP_LOGW(TAG, "HTTP server refused: logging active, Wi-Fi is off");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_httpd != NULL) {
         return ESP_OK;
     }
+
+    esp_err_t err = wifi_enable_ap();
+    if (err != ESP_OK) {
+        return err;
+    }
+
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size        = 6144;
     config.send_wait_timeout = 10;     /* don't hang forever on a stalled client */
     config.lru_purge_enable  = true;
 
-    esp_err_t err = httpd_start(&s_httpd, &config);
+    err = httpd_start(&s_httpd, &config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
         s_httpd = NULL;
@@ -823,6 +871,7 @@ esp_err_t stop_webserver(void)
         s_httpd = NULL;
         ESP_LOGI(TAG, "HTTP server stopped");
     }
+    wifi_disable_ap();
     return ESP_OK;
 }
 
@@ -892,9 +941,6 @@ void stop_imulogs() {
     s_timesync_state=true;
     ESP_ERROR_CHECK(start_espnow_timesync());
 
-    // start webserver
-    ESP_ERROR_CHECK(start_webserver()); 
-
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
 }
@@ -942,7 +988,6 @@ void app_main()
     ESP_ERROR_CHECK(init_stack());
     ESP_ERROR_CHECK(start_wifi());
     ESP_ERROR_CHECK(start_espnow_timesync());
-    ESP_ERROR_CHECK(start_webserver());
     ESP_ERROR_CHECK(init_gptimer(esp_timer_get_time()));
     ESP_ERROR_CHECK(init_imu());
     ESP_ERROR_CHECK(init_flash());

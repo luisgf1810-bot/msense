@@ -20,23 +20,12 @@ static void notify_status(void);
 
 static void do_start(void)
 {
-    /*if (!s_logging_active) {
-        if (imu_flash_log_start() == ESP_OK) {
-            s_logging_active = true;
-            ESP_LOGI(BLETAG, "logging started (BLE command)");
-        }
-    }*/
     start_imulogs();
     notify_status();
 }
 
 static void do_stop(void)
 {
-    /*if (s_logging_active) {
-        imu_flash_log_stop();
-        s_logging_active = false;
-        ESP_LOGI(BLETAG, "logging stopped (BLE command)");
-    }   */
     stop_imulogs();
     notify_status();
 }
@@ -66,6 +55,16 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
         case IMU_BLE_CMD_STOP:
             do_stop();
             break;
+        case IMU_BLE_CMD_HTTP_START:
+            if (start_webserver() != ESP_OK) {
+                return BLE_ATT_ERR_UNLIKELY;   /* e.g. logging active -> refused */
+            }
+            notify_status();
+            break;
+        case IMU_BLE_CMD_HTTP_STOP:
+            stop_webserver();
+            notify_status();
+            break;
         default:
             ESP_LOGW(BLETAG, "unknown command byte 0x%02x", data[0]);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -79,7 +78,7 @@ static int gatt_access_status(uint16_t conn_handle, uint16_t attr_handle,
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    uint8_t status_byte = s_logging_active ? 0x01 : 0x00;
+    uint8_t status_byte = ble_status_flags();
     int rc = os_mbuf_append(ctxt->om, &status_byte, sizeof(status_byte));
     return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
@@ -89,7 +88,7 @@ static void notify_status(void)
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
         return; /* nobody connected/subscribed */
     }
-    uint8_t status_byte = s_logging_active ? 0x01 : 0x00;
+    uint8_t status_byte = ble_status_flags();
     struct os_mbuf *om = ble_hs_mbuf_from_flat(&status_byte, sizeof(status_byte));
     if (om) {
         ble_gatts_notify_custom(s_conn_handle, s_status_handle, om);
