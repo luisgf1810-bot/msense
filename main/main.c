@@ -252,7 +252,7 @@ static esp_err_t wifi_enable_ap(void)
             .channel        = WIFI_AP_CHANNEL,
             .password       = WIFI_AP_PASS,
             .max_connection = WIFI_AP_MAX_CONN,
-            .authmode       = WIFI_AUTH_WPA2_PSK,
+            .authmode       = WIFI_AUTH_OPEN,
             .pmf_cfg        = { .required = false },
         },
     };
@@ -729,11 +729,16 @@ static void write_sector_to_flash(log_sector_t *sec)
 
 advance:
     s_next_sector++;
+    s_stats.next_sector = s_next_sector;    /* update stats BEFORE stopping */
+    s_stats.next_seq    = s_seq;
+
     if (s_next_sector >= s_total_sectors) {
-        stop_imulogs();
+        ESP_LOGW(TAG, "partition full, stopping log");
+        s_log_full = true;
+        stop_imulogs();                      /* sets s_timesync_state = true at its end */
+        ble_notify_status();                 /* now the flags read: logging=0, full=1 */
     }
-    s_stats.next_sector     = s_next_sector;
-    s_stats.next_seq        = s_seq;
+
 }
 
 static void flash_task(void *arg)
@@ -818,11 +823,6 @@ static esp_err_t imu_bin_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-uint8_t ble_status_flags(void)
-{
-    return (s_timesync_state ? 0x00 : 0x01) | (s_httpd ? 0x02 : 0x00);
-}
-
 esp_err_t start_webserver(void)
 {    
     if (!s_timesync_state) {
@@ -879,11 +879,21 @@ esp_err_t stop_webserver(void)
 
 
 /* BLE Commands */
+
+uint8_t ble_status_flags(void)
+{
+        return (s_timesync_state ? 0x00 : 0x01) |
+           (s_httpd         ? 0x02 : 0x00) |
+           (s_log_full      ? 0x04 : 0x00);
+}
+
 void start_imulogs() {
 
     tilt_led();
     tilt_led();
     tilt_led();
+
+    s_log_full = false;
 
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
@@ -977,7 +987,7 @@ void app_main()
     if (ok != pdPASS) {
         abort();
     }
-    ok = xTaskCreate(flash_task, "flash_task",  4096, NULL, tskIDLE_PRIORITY + 3, &s_writer_task);
+    ok = xTaskCreate(flash_task, "flash_task",  8192, NULL, tskIDLE_PRIORITY + 3, &s_writer_task);
     if (ok != pdPASS) {
         abort();
     }

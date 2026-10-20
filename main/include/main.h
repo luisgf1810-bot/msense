@@ -105,8 +105,8 @@ static uint                 gcolor=7;
 esp_netif_t *sta_netif = NULL;
 esp_netif_t *ap_netif  = NULL;
 
-#define WIFI_AP_SSID       "MASTER-AP"
-#define WIFI_AP_PASS       "12345678"   /* >= 8 chars for WPA2 */
+#define WIFI_AP_SSID       "HEAD-AP"
+#define WIFI_AP_PASS       ""           /* >= 8 chars for WPA2 */
 #define WIFI_AP_CHANNEL    1            /* keep equal to the ESP-NOW channel */
 #define WIFI_AP_MAX_CONN   4
 
@@ -188,7 +188,7 @@ static uint32_t                 s_next_sector;
 static uint32_t                 s_seq;
 static imu_log_stats_t          s_stats;
 static uint16_t                 ns=0;
-
+static volatile bool            s_log_full= false;
 
 
 // HTTP Server

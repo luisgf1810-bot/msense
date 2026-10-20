@@ -18,6 +18,11 @@ inline static void format_addr(char *addr_str, uint8_t addr[]) {
 
 static void notify_status(void);
 
+void ble_notify_status(void)
+{
+    notify_status();
+}
+
 static void do_start(void)
 {
     start_imulogs();

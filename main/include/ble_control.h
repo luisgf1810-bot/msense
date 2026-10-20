@@ -48,7 +48,7 @@ extern "C" {
 #define BLE_GAP_URI_PREFIX_HTTPS 0x17
 #define BLE_GAP_LE_ROLE_PERIPHERAL 0x00
 
-#define DEVICE_NAME "MASTER"
+#define DEVICE_NAME "HEAD"
 
 
 static const char *BLETAG = "ble_control";
@@ -92,6 +92,7 @@ void stop_imulogs();
 esp_err_t stop_webserver(void);
 esp_err_t start_webserver(void);
 uint8_t   ble_status_flags(void);
+void ble_notify_status(void);   /* push current status byte to the connected phone */
 
 #ifdef __cplusplus
 }
