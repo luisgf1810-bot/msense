@@ -11,7 +11,6 @@
 #include "freertos/event_groups.h"
 #include "freertos/stream_buffer.h"
 
-
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
@@ -22,7 +21,6 @@
 
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_http_server.h"
 
 #include "esp_event.h"
 #include "esp_mac.h"
@@ -38,17 +36,12 @@
 #include "espnow_time.h"
 #include "espnow_utils.h"
 
-
 #include "led_strip.h"
 #include "ble_control.h"
 #include "imu.h"
 
-
-
-
 // Logs
 const char *TAG = "MAIN";
-
 
 // BATTERY
 #define POWER_BAT_RUN 0U
@@ -61,54 +54,38 @@ const char *TAG = "MAIN";
 #define MIN_BATTERY_VOLTAGE 3350
 #define AVRG_FILTER_SIZE 8U
 
-
 static adc_oneshot_unit_handle_t adc1_handle;
 static adc_cali_handle_t adc1_cali_handle;
 static uint16_t _voltage_last = 0xFFU;
-static uint16_t _voltage_avrg[AVRG_FILTER_SIZE] = { 0 };
+static uint16_t _voltage_avrg[AVRG_FILTER_SIZE] = {0};
 uint8_t _voltage_index = 0;
 uint8_t _charge_state = POWER_INIT;
 uint8_t _chrg_counter = 0U;
 uint8_t _lowvoltage_counter = 0;
 
-
-
-
-
 // TIMER
-#define GPTIMER_RESOLUTION_HZ   (1000000ULL) // 1 MHz (1 tick = 1 us)
-#define TIMESYNC_BLINK_HZ       (4000000ULL)
+#define GPTIMER_RESOLUTION_HZ (1000000ULL) // 1 MHz (1 tick = 1 us)
+#define TIMESYNC_BLINK_HZ (4000000ULL)
 
-
-static TaskHandle_t             s_gptimer_task      = NULL;
-static gptimer_handle_t         s_gptimer           = NULL;
-static QueueHandle_t            s_gptimer_evt_q     = NULL;
-static portMUX_TYPE             s_gptimer_lock      = portMUX_INITIALIZER_UNLOCKED;
-static uint64_t                 gptimer_period      = TIMESYNC_BLINK_HZ;
-static volatile bool            s_timer_started     = false;
-
-
-
+static TaskHandle_t s_gptimer_task = NULL;
+static gptimer_handle_t s_gptimer = NULL;
+static QueueHandle_t s_gptimer_evt_q = NULL;
+static portMUX_TYPE s_gptimer_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t gptimer_period = TIMESYNC_BLINK_HZ;
+static volatile bool s_timer_started = false;
 
 // LED
-#define LED_SLP_PIN   20
-#define LED_PIN   19                
-#define LED_STRIP_NUM_PIXELS 1      
+#define LED_SLP_PIN 20
+#define LED_PIN 19
+#define LED_STRIP_NUM_PIXELS 1
 #define BLINKER_MIN_SCHEDULE_AHEAD_US 5000ULL /* 5 ms */
 
-static led_strip_handle_t   s_led_strip    = NULL;
-static uint                 gcolor=7;
-
+static led_strip_handle_t s_led_strip = NULL;
+static uint gcolor = 7;
 
 // WiFI
 
 esp_netif_t *sta_netif = NULL;
-esp_netif_t *ap_netif  = NULL;
-
-#define WIFI_AP_SSID       "HEAD-AP"
-#define WIFI_AP_PASS       ""           /* >= 8 chars for WPA2 */
-#define WIFI_AP_CHANNEL    1            /* keep equal to the ESP-NOW channel */
-#define WIFI_AP_MAX_CONN   4
 
 
 // ESPNOW TIMESYNC
@@ -116,25 +93,23 @@ esp_netif_t *ap_netif  = NULL;
 #define TIMESYNC_BROADCAST_INTERVAL_MS 2000
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
 
-static bool                     s_timesync_state    = true;
-
-
+static bool s_timesync_state = true;
 
 // FLASH Log
-#define SECTOR_SIZE                 4096UL
-#define STREAM_BUFFER_SIZE          (SECTOR_SIZE * 4)  // 16KB RAM buffer to absorb flash erase latency
-#define IMU_LOG_PARTITION_LABEL     "imu_log"
-#define IMU_SAMPLE_PERIOD_US        10000   /* 10 ms -> 100 Hz */
-#define FLASH_SECTOR_SIZE           4096u
-#define SECTOR_MAGIC                0x494D5546u   /* "IMUF" */
+#define SECTOR_SIZE 4096UL
+#define STREAM_BUFFER_SIZE (SECTOR_SIZE * 4) // 16KB RAM buffer to absorb flash erase latency
+#define IMU_LOG_PARTITION_LABEL "imu_log"
+#define IMU_SAMPLE_PERIOD_US 10000 /* 10 ms -> 100 Hz */
+#define FLASH_SECTOR_SIZE 4096u
+#define SECTOR_MAGIC 0x494D5546u /* "IMUF" */
 
-
-typedef struct __attribute__((packed)) {
-    uint32_t magic;         /* SECTOR_MAGIC when this sector holds valid data */
-    uint32_t seq;           /* monotonically increasing write sequence number */
-    uint16_t sample_count;  /* number of valid imu_sample_t entries that follow */
+typedef struct __attribute__((packed))
+{
+    uint32_t magic;        /* SECTOR_MAGIC when this sector holds valid data */
+    uint32_t seq;          /* monotonically increasing write sequence number */
+    uint16_t sample_count; /* number of valid imu_sample_t entries that follow */
     uint16_t reserved;
-    uint32_t crc32;         /* CRC32 over the first sample_count samples       */
+    uint32_t crc32; /* CRC32 over the first sample_count samples       */
 } sector_header_t;
 
 _Static_assert(sizeof(sector_header_t) == 16, "header must be 16 bytes");
@@ -147,113 +122,112 @@ _Static_assert(sizeof(sector_header_t) == 16, "header must be 16 bytes");
  * esp_partition_write() call -- this is the "fastest api" write path:
  * one erase_range() + one write() per sector, no partial writes, no
  * filesystem bookkeeping layered on top. */
-typedef struct __attribute__((packed)) {
-    sector_header_t             header;                         // 16 byte header
-    imu_sample_t                samples[SAMPLES_PER_SECTOR];    // 21 bytes IMU flash
-    uint32_t                    padd;                           // 4 byte padding
-    uint16_t                    reserved;                       // 2 bytes reserved
+typedef struct __attribute__((packed))
+{
+    sector_header_t header;                   // 16 byte header
+    imu_sample_t samples[SAMPLES_PER_SECTOR]; // 21 bytes IMU flash
+    uint32_t padd;                            // 4 byte padding
+    uint16_t reserved;                        // 2 bytes reserved
 } log_sector_t;
 
-_Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE,  "log_sector_t must be exactly one flash sector");
+_Static_assert(sizeof(log_sector_t) == FLASH_SECTOR_SIZE, "log_sector_t must be exactly one flash sector");
 
-
-typedef struct {
+typedef struct
+{
     uint32_t sectors_written;
     uint32_t sectors_erase_failed;
     uint32_t sectors_write_failed;
-    uint32_t buffer_overruns;     /* writer couldn't keep up in time     */
+    uint32_t buffer_overruns; /* writer couldn't keep up in time     */
     uint32_t next_sector;
     uint32_t next_seq;
     uint32_t total_sectors;
-    uint32_t wrap_count;          /* how many times the ring has wrapped */
+    uint32_t wrap_count; /* how many times the ring has wrapped */
 } imu_log_stats_t;
-
-
-
 
 /* Double buffer: while one is being filled by the timer callback, the
  * other is either idle (already flushed) or being written by the
  * writer task. Exactly one of {s_buf[0], s_buf[1]} is "active" at a
  * time; the other is either empty or in flight to flash. */
 
-static portMUX_TYPE             s_mux = portMUX_INITIALIZER_UNLOCKED;
-static QueueHandle_t            s_flush_q;      /* holds indices (0/1) of full buffers */
-static TaskHandle_t             s_writer_task;
-static const esp_partition_t    *s_partition;
-static volatile uint8_t         s_active = 0;
-static log_sector_t             s_buf[2];
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+static QueueHandle_t s_flush_q; /* holds indices (0/1) of full buffers */
+static TaskHandle_t s_writer_task;
+static const esp_partition_t *s_partition;
+static volatile uint8_t s_active = 0;
+static log_sector_t s_buf[2];
 
-static uint32_t                 s_total_sectors=0;
-static uint32_t                 s_next_sector;
-static uint32_t                 s_seq;
-static imu_log_stats_t          s_stats;
-static uint16_t                 ns=0;
-static volatile bool            s_log_full= false;
+static uint32_t s_total_sectors = 0;
+static uint32_t s_next_sector;
+static uint32_t s_seq;
+static imu_log_stats_t s_stats;
+static uint16_t ns = 0;
+static volatile bool            s_log_full      = false;
+static volatile bool            s_sampling      = false;  /* gate: on_sensor_data stores samples only while true */
+static volatile bool            s_stop_busy     = false;  /* stop_imulogs() already running */
 
 
-// HTTP Server
-static httpd_handle_t s_httpd = NULL;
-esp_err_t start_webserver(void);
-esp_err_t stop_webserver(void);
-uint8_t   ble_status_flags(void);
+uint8_t ble_status_flags(void);
 
 /*  Battery */
-esp_err_t init_battery() ;
+esp_err_t init_battery();
 int read_voltage_mv(void);
 uint16_t BatteryVoltageRead();
 int get_battery_state(void);
 uint8_t BatteryLevelRead();
 
-
 /* Initialize led strip */
-esp_err_t init_led(void) ;
-void tilt_led(void) ;
-
-
+esp_err_t init_led(void);
+void tilt_led(void);
 
 /* Initialize Wi-Fi & ESP-NOW TIME Sync */
 esp_err_t init_stack(void);
 static esp_err_t wifi_enable_ap(void);
 static esp_err_t start_wifi(void);
-esp_err_t stop_wifi(void) ;
+esp_err_t stop_wifi(void);
 esp_err_t start_espnow_timesync(void);
-esp_err_t stop_espnow_timesync(void) ;
-
+esp_err_t stop_espnow_timesync(void);
 
 /* GPTimer Init and ISR Callback  */
 static uint64_t ticks_to_next_boundary(uint64_t phase_now);
-static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata,  void *user_ctx);
-esp_err_t init_gptimer(uint64_t phase_now) ;
+static bool IRAM_ATTR timer_alarm_cb(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx);
+esp_err_t init_gptimer(uint64_t phase_now);
 esp_err_t gptimer_arm_next(uint64_t phase_now);
 static void timer_task(void *arg);
 
-
 /* IMU  */
 static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *value, void *ctx);
-esp_err_t init_imu() ;
-
+esp_err_t init_imu();
 
 /* Flash functions */
 static inline bool seq_is_newer(uint32_t a, uint32_t b);
 void imu_flash_log_get_stats(imu_log_stats_t *out);
-esp_err_t init_flash(void) ;
+esp_err_t init_flash(void);
 esp_err_t flash_log_start(void);
-esp_err_t flash_log_stop(void) ;
+esp_err_t flash_log_stop(void);
 esp_err_t imu_flash_log_flush_partial(void);
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes);
 static void write_sector_to_flash(log_sector_t *sec);
 
 
+// BLE download
+static TaskHandle_t     s_dl_task        = NULL;
+static volatile bool    s_dl_active      = false;
+static volatile bool    s_dl_abort       = false;
+static volatile uint8_t s_dl_reason      = 0;
+static uint32_t         s_dl_start_sector = 0;
+static uint32_t         s_dl_sectors      = 0;
 
-/* HTTP download server */
-esp_err_t start_webserver(void);
-esp_err_t stop_webserver(void);
-static esp_err_t imu_bin_get_handler(httpd_req_t *req);
-uint8_t   ble_status_flags(void);
-
-/* BLE Commands */uint8_t   ble_status_flags(void);
-void start_imulogs() ;
-void stop_imulogs() ;
+esp_err_t imu_download_start(bool full, uint32_t start_sector);
+void      imu_download_stop(uint8_t reason);
+static void dl_task(void *arg);
+uint8_t ble_status_flags(void);
+static void radio_pause(void);
+static void radio_resume(void);  
 
 
+
+/* BLE Commands */ 
+uint8_t ble_status_flags(void);
+void start_imulogs();
+void stop_imulogs();
 

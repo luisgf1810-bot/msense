@@ -234,57 +234,6 @@ esp_err_t init_stack(void) {
     return ESP_OK;
 }
 
-static esp_err_t wifi_enable_ap(void)
-{
-    if (ap_netif != NULL) {
-        return ESP_OK;                       /* already up */
-    }
-
-    ap_netif = esp_netif_create_default_wifi_ap();
-    if (ap_netif == NULL) {
-        return ESP_FAIL;
-    }
-
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid           = WIFI_AP_SSID,
-            .ssid_len       = strlen(WIFI_AP_SSID),
-            .channel        = WIFI_AP_CHANNEL,
-            .password       = WIFI_AP_PASS,
-            .max_connection = WIFI_AP_MAX_CONN,
-            .authmode       = WIFI_AUTH_OPEN,
-            .pmf_cfg        = { .required = false },
-        },
-    };
-
-    /* APSTA keeps the STA interface alive, so ESP-NOW time sync keeps running */
-    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
-    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-    if (err == ESP_OK) err = esp_wifi_set_channel(WIFI_AP_CHANNEL, WIFI_SECOND_CHAN_NONE);
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "enable AP failed: %s", esp_err_to_name(err));
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        esp_netif_destroy_default_wifi(ap_netif);
-        ap_netif = NULL;
-        return err;
-    }
-
-    ESP_LOGI(TAG, "AP enabled: \"%s\" ch %d", WIFI_AP_SSID, WIFI_AP_CHANNEL);
-    return ESP_OK;
-}
-
-static void wifi_disable_ap(void)
-{
-    if (ap_netif == NULL) {
-        return;                              /* nothing to do (also when Wi-Fi is already off) */
-    }
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_netif_destroy_default_wifi(ap_netif);
-    ap_netif = NULL;
-    ESP_LOGI(TAG, "AP disabled, back to STA");
-}
-
 esp_err_t start_wifi(void) {
 
        sta_netif = esp_netif_create_default_wifi_sta();
@@ -429,9 +378,9 @@ esp_err_t gptimer_arm_next(uint64_t phase_now)
 
 static void timer_task(void *arg)
 {
-    uint64_t tick;
+    uint8_t evt;
     for (;;) {
-        if (xQueueReceive(s_gptimer_evt_q, &tick, portMAX_DELAY) == pdTRUE) {  
+        if (xQueueReceive(s_gptimer_evt_q, &evt, portMAX_DELAY) == pdTRUE) {  
             
             if (!s_timesync_state) {
                 bno085_service(bno085);
@@ -444,10 +393,11 @@ static void timer_task(void *arg)
 
             uint64_t now = (uint64_t)esp_timer_get_time();
 
-            if (s_timesync_state) {
+            /*if (s_timesync_state) {
                 uint64_t tick = now / gptimer_period;
-                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us, battery_state = %u", tick, now, get_battery_state());
-            }
+                ESP_LOGI(TAG, "TICK %" PRIu64 "  synced_t = %" PRIu64 " us, battery_state = %u", 
+                    tick, now, get_battery_state());
+            }*/
 
             /* Re-arm the next one-shot alarm right away - the timer
              * never auto-reloads, so this is the only thing keeping it
@@ -481,14 +431,8 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.game_rotation.j      = value->data.game_rotation_vector.j;
             sample.game_rotation.k      = value->data.game_rotation_vector.k;
             sample.game_rotation.real   = value->data.game_rotation_vector.real;
-            /*printf("(%.4f)%.4f,%.4f,%.4f,%.4f\n",
-                    1000000/((te-ti)/rate),
-                    value->data.game_rotation_vector.i, 
-                    value->data.game_rotation_vector.j,
-                    value->data.game_rotation_vector.k,
-                    value->data.game_rotation_vector.real
-                    );*/
             break;
+
         case BNO085_SENSOR_LINEAR_ACCELERATION:
             te=esp_timer_get_time();        
             rate+=1;
@@ -496,16 +440,10 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.linear_accel.x       = value->data.linear_acceleration.x;
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
-            /*printf("(%.4f)%.4f,%.4f,%.4f\n",
-                    1000000/((te-ti)/rate),
-                    value->data.linear_acceleration.x, 
-                    value->data.linear_acceleration.y,
-                    value-80>data.linear_acceleration.z
-                    );*/
             break;
 
         default:
-            break;
+            return;
                
     }
 
@@ -515,6 +453,12 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
     }*/
 
     taskENTER_CRITICAL(&s_mux);
+
+    if (!s_sampling) {                 /* logging closed -> drop late reports */
+        taskEXIT_CRITICAL(&s_mux);
+        return;
+    }
+
     uint8_t idx = s_active;
     log_sector_t *buf = &s_buf[idx];
 
@@ -657,25 +601,41 @@ esp_err_t flash_log_stop(void) {
     return ESP_OK;
 }
 
+
+static bool flash_buffers_idle(void)
+{
+    taskENTER_CRITICAL(&s_mux);
+    bool idle = (s_buf[0].header.sample_count == 0) && (s_buf[1].header.sample_count == 0);
+    taskEXIT_CRITICAL(&s_mux);
+    return idle;
+}
+
 esp_err_t imu_flash_log_flush_partial(void)
 {
-    uint8_t idx;
-    uint16_t count;
+    uint8_t idx = s_active;
+    log_sector_t *b = &s_buf[idx];
+    uint16_t count = b->header.sample_count;
 
-    taskENTER_CRITICAL(&s_mux);
-    idx = s_active;
-    count = s_buf[idx].header.sample_count;
     if (count > 0) {
-        uint8_t other = 1 - idx;
-        s_active = other; /* stop new samples from landing in idx */
-    }
-    taskEXIT_CRITICAL(&s_mux);
+        /* Zero everything after the valid samples (stale data from earlier
+         * fills, padd, reserved) so the stored sector is clean; type 0 == EMPTY. */
+        memset(&b->samples[count], 0,
+               sizeof(log_sector_t) - offsetof(log_sector_t, samples) - (size_t)count * sizeof(imu_sample_t));
 
-    if (count == 0) {
-        return ESP_OK; /* nothing pending */
+        if (xQueueSend(s_flush_q, &idx, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            ESP_LOGE(TAG, "flush_partial: queue full");
+            return ESP_ERR_TIMEOUT;
+        }
     }
-    xQueueSend(s_flush_q, &idx, portMAX_DELAY);
-    return ESP_OK;
+
+    for (int i = 0; i < 200; i++) {            /* up to ~2 s */
+        if (flash_buffers_idle()) {
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGE(TAG, "flush_partial: flash task did not drain");
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t imu_flash_log_read_sector_raw(uint32_t sector_index, void *out_buf_4096_bytes)
@@ -757,124 +717,139 @@ static void flash_task(void *arg)
 
 
 
-/* WebServer */
+/* BLE Download */
 
-static esp_err_t imu_bin_get_handler(httpd_req_t *req)
+esp_err_t imu_download_start(bool full, uint32_t start_sector)
 {
     if (!s_timesync_state) {
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_sendstr(req, "logging in progress");
-        return ESP_OK;
-    }
-
-    ESP_LOGI(TAG, "-------> HTTP Req %d", req->uri);
-
-    /* Default: only the sectors written in the last run.
-     * GET /imu.bin?full=1 -> the whole partition. */
-    imu_log_stats_t stats;
-    imu_flash_log_get_stats(&stats);
-    uint32_t sectors = stats.next_sector;
-
-    char query[32], val[4];
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-        httpd_query_key_value(query, "full", val, sizeof(val)) == ESP_OK &&
-        val[0] == '1') {
-        sectors = (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE);
-    }
-
-    if (sectors == 0) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no data (try ?full=1)");
-        return ESP_OK;
-    }
-
-    uint8_t *buf = malloc(FLASH_SECTOR_SIZE);
-    if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-        return ESP_OK;
-    }
-
-    char total[16];
-    snprintf(total, sizeof(total), "%" PRIu32, sectors * FLASH_SECTOR_SIZE);
-    httpd_resp_set_type(req, "application/octet-stream");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"imu_log.bin\"");
-    httpd_resp_set_hdr(req, "X-Total-Size", total);   /* chunked, so no Content-Length */
-
-    for (uint32_t i = 0; i < sectors; i++) {
-        if (!s_timesync_state) {            /* logging restarted -> abort */
-            ESP_LOGW(TAG, "download aborted: logging started");
-            free(buf);
-            return ESP_FAIL;                /* closes the socket, client sees an incomplete transfer */
-        }
-        if (esp_partition_read(s_partition, (size_t)i * FLASH_SECTOR_SIZE, buf, FLASH_SECTOR_SIZE) != ESP_OK) {
-            ESP_LOGE(TAG, "flash read failed @ sector %" PRIu32, i);
-            free(buf);
-            return ESP_FAIL;
-        }
-        if (httpd_resp_send_chunk(req, (const char *)buf, FLASH_SECTOR_SIZE) != ESP_OK) {
-            ESP_LOGW(TAG, "client closed connection @ sector %" PRIu32, i);
-            free(buf);
-            return ESP_FAIL;
-        }
-    }
-
-    free(buf);
-    httpd_resp_send_chunk(req, NULL, 0);    /* end of chunked response */
-    ESP_LOGI(TAG, "download complete: %" PRIu32 " sectors", sectors);
-    return ESP_OK;
-}
-
-esp_err_t start_webserver(void)
-{    
-    if (!s_timesync_state) {
-        ESP_LOGW(TAG, "HTTP server refused: logging active, Wi-Fi is off");
+        ESP_LOGW(TAG, "download refused: logging active");
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_httpd != NULL) {
-        return ESP_OK;
+    if (s_dl_active) {
+        return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = wifi_enable_ap();
-    if (err != ESP_OK) {
-        return err;
+    imu_log_stats_t stats;
+    imu_flash_log_get_stats(&stats);
+    uint32_t total = full ? (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE) : stats.next_sector;
+
+    if (total == 0 || start_sector >= total) {
+        return ESP_ERR_NOT_FOUND;
     }
 
-
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size        = 6144;
-    config.send_wait_timeout = 10;     /* don't hang forever on a stalled client */
-    config.lru_purge_enable  = true;
-
-    err = httpd_start(&s_httpd, &config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        s_httpd = NULL;
-        return err;
-    }
-
-    httpd_uri_t imu_uri = {
-        .uri     = "/imu.bin",
-        .method  = HTTP_GET,
-        .handler = imu_bin_get_handler,
-        .user_ctx = NULL,
-    };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &imu_uri));
-
-    ESP_LOGI(TAG, "HTTP server started: GET http://192.168.4.1/imu.bin");
-
+    s_dl_sectors      = total;
+    s_dl_start_sector = start_sector;
+    s_dl_abort        = false;
+    s_dl_reason       = 0;
+    s_dl_active       = true;
+    xTaskNotifyGive(s_dl_task);
     return ESP_OK;
 }
 
-esp_err_t stop_webserver(void)
+void imu_download_stop(uint8_t reason)
 {
-    if (s_httpd != NULL) {
-        httpd_stop(s_httpd);
-        s_httpd = NULL;
-        ESP_LOGI(TAG, "HTTP server stopped");
+    if (s_dl_active) {
+        s_dl_reason = reason;
+        s_dl_abort  = true;
     }
-    wifi_disable_ap();
-    return ESP_OK;
 }
 
+static void dl_task(void *arg)
+{
+    uint8_t *sector = malloc(FLASH_SECTOR_SIZE);
+    static uint8_t pkt[4 + 240];
+    if (!sector) abort();
+
+    
+
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        uint32_t first       = s_dl_start_sector;
+        uint32_t total_bytes = s_dl_sectors * FLASH_SECTOR_SIZE;
+        uint32_t offset      = first * FLASH_SECTOR_SIZE;
+        uint8_t  reason      = 0;
+
+        ESP_LOGI(TAG, "BLE download start: sectors %" PRIu32 "..%" PRIu32, first, s_dl_sectors - 1);
+
+        radio_pause();
+
+        ble_notify_xfer(XFER_EVT_STARTED, total_bytes, offset);
+        ble_notify_status();
+
+        for (uint32_t i = first; i < s_dl_sectors && reason == 0; i++) {
+            if (s_dl_abort)        { reason = s_dl_reason ? s_dl_reason : IMU_DL_REASON_USER; break; }
+            if (!s_timesync_state) { reason = IMU_DL_REASON_LOGGING; break; }
+
+            if (esp_partition_read(s_partition, (size_t)i * FLASH_SECTOR_SIZE,
+                                   sector, FLASH_SECTOR_SIZE) != ESP_OK) {
+                reason = IMU_DL_REASON_FLASH;
+                break;
+            }
+
+            uint32_t pos = 0;
+            while (pos < FLASH_SECTOR_SIZE && reason == 0) {
+                uint16_t pl = ble_data_payload_len();
+                if (pl == 0) { reason = IMU_DL_REASON_DISCONNECT; break; }
+                uint32_t n = FLASH_SECTOR_SIZE - pos;
+                if (n > pl) n = pl;
+
+                uint32_t off = offset;
+                pkt[0] = (uint8_t)off;         pkt[1] = (uint8_t)(off >> 8);
+                pkt[2] = (uint8_t)(off >> 16); pkt[3] = (uint8_t)(off >> 24);
+                memcpy(&pkt[4], &sector[pos], n);
+
+                /* retry while the controller/host queue is full */
+                int rc, tries = 0;
+                while ((rc = ble_notify_data(pkt, (uint16_t)(4 + n))) != 0) {
+                    if (s_dl_abort) { reason = s_dl_reason ? s_dl_reason : IMU_DL_REASON_USER; break; }
+                    if (rc == BLE_HS_ENOTCONN) { reason = IMU_DL_REASON_DISCONNECT; break; }
+                    if ((rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) || ++tries > 400) {
+                        ESP_LOGW(TAG, "notify failed rc=%d", rc);
+                        reason = IMU_DL_REASON_SEND;
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(5));
+                }
+                if (reason) break;
+
+                pos    += n;
+                offset += n;
+            }
+
+            vTaskDelay(1);   /* let IDLE run and feed the task watchdog */
+        }
+
+
+        if (reason == 0) {
+            ESP_LOGI(TAG, "BLE download complete: %" PRIu32 " bytes", offset);
+            ble_notify_xfer(XFER_EVT_COMPLETE, offset, 0);
+        } else {
+            ESP_LOGW(TAG, "BLE download aborted: reason %u at offset %" PRIu32, reason, offset);
+            ble_notify_xfer(XFER_EVT_ABORTED, reason, offset);
+        }
+
+        radio_resume();
+        
+        s_dl_active = false;
+        ble_notify_status();
+    }
+
+}
+
+static void radio_pause(void)
+{
+    stop_espnow_timesync();          /* espnow_time_initiator_stop + espnow_deinit */
+    esp_wifi_stop();
+}
+
+static void radio_resume(void)
+{
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_ERROR_CHECK(start_espnow_timesync());
+}
 
 
 
@@ -882,12 +857,16 @@ esp_err_t stop_webserver(void)
 
 uint8_t ble_status_flags(void)
 {
-        return (s_timesync_state ? 0x00 : 0x01) |
-           (s_httpd         ? 0x02 : 0x00) |
-           (s_log_full      ? 0x04 : 0x00);
+    return (s_timesync_state ? 0x00 : 0x01) |
+           (s_dl_active      ? 0x02 : 0x00) |
+           (s_log_full       ? 0x04 : 0x00);
 }
 
 void start_imulogs() {
+
+     if (!s_timesync_state) {          /* already logging (or stopping) */
+        return;
+    }
 
     tilt_led();
     tilt_led();
@@ -897,6 +876,8 @@ void start_imulogs() {
 
     // flash log
     ESP_ERROR_CHECK(flash_log_start());
+
+    s_sampling = true;                /* open the gate */
 
     if (IMU_ENABLE_LA) {
         bno085_enable_sensor(bno085, BNO085_SENSOR_LINEAR_ACCELERATION, IMU_LA_SAMPLING_RATE_HZ);
@@ -914,8 +895,11 @@ void start_imulogs() {
     ESP_ERROR_CHECK(stop_espnow_timesync());
     s_timesync_state=false;
 
-    // stop webserver
-    stop_webserver();
+    // abort any BLE download and wait for the task to finish
+    imu_download_stop(IMU_DL_REASON_LOGGING);
+    for (int i = 0; i < 100 && s_dl_active; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
     // stop wifi
     ESP_ERROR_CHECK(stop_wifi());
@@ -926,9 +910,15 @@ void start_imulogs() {
 
 void stop_imulogs() {
 
-    tilt_led();
-    tilt_led();
-    tilt_led();
+    /* Re-entrancy guard: also covers the partition-full path, where
+     * flash_task calls us while a BLE-initiated stop may be in progress. */
+    taskENTER_CRITICAL(&s_mux);
+    bool skip = s_stop_busy || s_timesync_state;   /* already stopping, or not logging */
+    if (!skip) s_stop_busy = true;
+    taskEXIT_CRITICAL(&s_mux);
+    if (skip) {
+        return;
+    }
 
     // disable IMU
     if (IMU_ENABLE_LA) {
@@ -940,10 +930,26 @@ void stop_imulogs() {
         ESP_LOGI(TAG, "IMU GRV disabled");  
     }
 
+    // close the gate: no sample can be appended after this point
+    taskENTER_CRITICAL(&s_mux);
+    s_sampling = false;
+    taskEXIT_CRITICAL(&s_mux);
+
+    // write the last partial sector (not from flash_task: that path means the
+    // partition is full and flash_task cannot wait on itself)
+    if (xTaskGetCurrentTaskHandle() != s_writer_task) {
+        if (imu_flash_log_flush_partial() != ESP_OK) {
+            ESP_LOGW(TAG, "last partial sector may not have been written");
+        }
+    }
+
     // stop flash logging
     ESP_ERROR_CHECK(flash_log_stop());
 
-
+    tilt_led();
+    tilt_led();
+    tilt_led();
+    
     // start wifi
     ESP_ERROR_CHECK(start_wifi());
 
@@ -975,7 +981,7 @@ void app_main()
     ESP_ERROR_CHECK(ret);
 
     // Tasks
-    s_gptimer_evt_q = xQueueCreate(4, sizeof(uint64_t));
+    s_gptimer_evt_q = xQueueCreate(1, sizeof(uint8_t));
     if (!s_gptimer_evt_q) {
         abort();
     }
@@ -988,6 +994,10 @@ void app_main()
         abort();
     }
     ok = xTaskCreate(flash_task, "flash_task",  8192, NULL, tskIDLE_PRIORITY + 3, &s_writer_task);
+    if (ok != pdPASS) {
+        abort();
+    }
+    ok = xTaskCreate(dl_task, "dl_task", 4096, NULL, tskIDLE_PRIORITY + 2, &s_dl_task);
     if (ok != pdPASS) {
         abort();
     }

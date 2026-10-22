@@ -46,7 +46,7 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    uint8_t data[4];
+    uint8_t data[8];
     uint16_t out_len = 0;
     int rc = ble_hs_mbuf_to_flat(ctxt->om, data, sizeof(data), &out_len);
     if (rc != 0 || out_len < 1) {
@@ -60,15 +60,23 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
         case IMU_BLE_CMD_STOP:
             do_stop();
             break;
-        case IMU_BLE_CMD_HTTP_START:
-            if (start_webserver() != ESP_OK) {
-                return BLE_ATT_ERR_UNLIKELY;   /* e.g. logging active -> refused */
+          case IMU_BLE_CMD_DL_START: {
+            bool full = (out_len >= 2) && (data[1] & IMU_DL_FLAG_FULL);
+            uint32_t start_sector = 0;
+            if (out_len >= 6) {
+                start_sector = (uint32_t)data[2] | ((uint32_t)data[3] << 8) |
+                               ((uint32_t)data[4] << 16) | ((uint32_t)data[5] << 24);
             }
-            notify_status();
+            if (!s_data_subscribed) {
+                return BLE_ATT_ERR_WRITE_NOT_PERMITTED;  /* subscribe to Data first */
+            }
+            if (imu_download_start(full, start_sector) != ESP_OK) {
+                return BLE_ATT_ERR_UNLIKELY;  /* logging active / already running / no data */
+            }
             break;
-        case IMU_BLE_CMD_HTTP_STOP:
-            stop_webserver();
-            notify_status();
+        }
+        case IMU_BLE_CMD_DL_STOP:
+            imu_download_stop(IMU_DL_REASON_USER);
             break;
         default:
             ESP_LOGW(BLETAG, "unknown command byte 0x%02x", data[0]);
@@ -124,6 +132,36 @@ void ble_notify_battery(void)
     }
 }
 
+uint16_t ble_data_payload_len(void)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return 0;
+    uint16_t mtu = ble_att_mtu(s_conn_handle);
+    if (mtu < 3 + 4 + 1) return 0;
+    uint16_t p = mtu - 3 - 4;
+    return p > 240 ? 240 : p;
+}
+
+int ble_notify_data(const uint8_t *data, uint16_t len)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_data_subscribed) {
+        return BLE_HS_ENOTCONN;
+    }
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
+    if (!om) return BLE_HS_ENOMEM;
+    return ble_gatts_notify_custom(s_conn_handle, s_data_handle, om);  /* consumes om */
+}
+
+void ble_notify_xfer(uint8_t evt, uint32_t a, uint32_t b)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
+    uint8_t p[9] = { evt,
+        (uint8_t)a, (uint8_t)(a >> 8), (uint8_t)(a >> 16), (uint8_t)(a >> 24),
+        (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(p, sizeof(p));
+    if (om) ble_gatts_notify_custom(s_conn_handle, s_xfer_handle, om);
+}
+
+
 
 /* -------------------------------------------------------------------- */
 /* GATT service table                                                    */
@@ -145,6 +183,18 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .val_handle = &s_status_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
+             {
+                .uuid = &data_uuid.u,
+                .access_cb = gatt_access_status,   /* never read; notify only */
+                .val_handle = &s_data_handle,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = &xfer_uuid.u,
+                .access_cb = gatt_access_status,
+                .val_handle = &s_xfer_handle,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
             { 0 }, /* terminator */
         },
     },
@@ -158,6 +208,7 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .val_handle = &s_batt_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
+
             { 0 },
         },
     },
@@ -280,6 +331,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(BLETAG, "disconnected, reason=%d", event->disconnect.reason);
             s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            s_data_subscribed = false;
+            imu_download_stop(IMU_DL_REASON_DISCONNECT);
             start_advertising();
             break;
 
@@ -288,8 +341,15 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             break;
 
         case BLE_GAP_EVENT_SUBSCRIBE:
-            ESP_LOGI(BLETAG, "subscribe: attr=%d notify=%d",
-                      event->subscribe.attr_handle, event->subscribe.cur_notify);
+            ESP_LOGI(BLETAG, "subscribe: attr=%d notify=%d", event->subscribe.attr_handle, event->subscribe.cur_notify);
+            if (event->subscribe.attr_handle == s_data_handle) {
+                s_data_subscribed = event->subscribe.cur_notify;
+                if (!s_data_subscribed) imu_download_stop(IMU_DL_REASON_DISCONNECT);
+            }
+            break;
+
+        case BLE_GAP_EVENT_MTU:
+            ESP_LOGI(BLETAG, "mtu update: %d", event->mtu.value);
             break;
 
         default:
@@ -376,6 +436,7 @@ esp_err_t init_ble(void)
 
 
     // Nimble freertos stack initialization
+    ble_att_set_preferred_mtu(247);
     nimble_port_freertos_init(host_task);
 
     ESP_LOGI(BLETAG, "BLE control ready");

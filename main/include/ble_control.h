@@ -23,7 +23,8 @@
 #include "esp_err.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 /* Includes */
 
@@ -50,49 +51,79 @@ extern "C" {
 
 #define DEVICE_NAME "HEAD"
 
+    static const char *BLETAG = "ble_control";
 
-static const char *BLETAG = "ble_control";
+    typedef enum
+    {
+        IMU_BLE_CMD_STOP = 0x00,
+        IMU_BLE_CMD_START = 0x01,
+        IMU_BLE_CMD_DL_START = 0x02, /* [flags][start_sector u32 LE] optional */
+        IMU_BLE_CMD_DL_STOP = 0x03,
+    } imu_ble_cmd_t;
 
-/* ---- command byte values written to the Command characteristic ------- */
-typedef enum {
-    IMU_BLE_CMD_STOP  = 0x00,
-    IMU_BLE_CMD_START = 0x01,
-    IMU_BLE_CMD_HTTP_START = 0x02,
-    IMU_BLE_CMD_HTTP_STOP  = 0x03,
-} imu_ble_cmd_t;
+#define IMU_DL_FLAG_FULL 0x01
 
-/* ---- 128-bit UUIDs (see ble_control.h for the human-readable form) --- */
-static const ble_uuid128_t svc_uuid =
-    BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c,  0xed, 0x41, 0x60, 0x0d, 0x01, 0x00, 0xfa, 0x59);
+    typedef enum
+    {
+        XFER_EVT_STARTED = 0x01,
+        XFER_EVT_COMPLETE = 0x02,
+        XFER_EVT_ABORTED = 0x03,
+    } xfer_evt_t;
 
-static const ble_uuid128_t cmd_uuid =
-    BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c,  0xed, 0x41, 0x60, 0x0d, 0x02, 0x00, 0xfa, 0x59);
+    typedef enum
+    {
+        IMU_DL_REASON_USER = 1,
+        IMU_DL_REASON_LOGGING = 2,
+        IMU_DL_REASON_DISCONNECT = 3,
+        IMU_DL_REASON_FLASH = 4,
+        IMU_DL_REASON_SEND = 5,
+    } imu_dl_reason_t;
 
-static const ble_uuid128_t status_uuid =
-    BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c,  0xed, 0x41, 0x60, 0x0d, 0x03, 0x00, 0xfa, 0x59);
+    /* ---- 128-bit UUIDs (see ble_control.h for the human-readable form) --- */
+    static const ble_uuid128_t svc_uuid =
+        BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c, 0xed, 0x41, 0x60, 0x0d, 0x01, 0x00, 0xfa, 0x59);
 
-static uint8_t  own_addr_type;
-static uint8_t  addr_val[6] = {0};
-static uint16_t s_conn_handle   = BLE_HS_CONN_HANDLE_NONE;
-static uint16_t s_status_handle;
-static uint16_t s_batt_handle;
+    static const ble_uuid128_t cmd_uuid =
+        BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c, 0xed, 0x41, 0x60, 0x0d, 0x02, 0x00, 0xfa, 0x59);
 
-uint8_t BatteryLevelRead(void);   /* defined in main.c */
-void ble_notify_battery(void);
+    static const ble_uuid128_t status_uuid =
+        BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c, 0xed, 0x41, 0x60, 0x0d, 0x03, 0x00, 0xfa, 0x59);
 
+    static const ble_uuid128_t data_uuid =
+        BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c, 0xed, 0x41, 0x60, 0x0d, 0x04, 0x00, 0xfa, 0x59);
 
-esp_err_t init_ble(void);
-static int gap_event_handler(struct ble_gap_event *event, void *arg); 
+    static const ble_uuid128_t xfer_uuid =
+        BLE_UUID128_INIT(0x08, 0xa7, 0xe1, 0x17, 0x1c, 0xcf, 0x1b, 0x9c, 0xed, 0x41, 0x60, 0x0d, 0x05, 0x00, 0xfa, 0x59);
 
-/* Library function declarations */
-void ble_store_config_init(void);
+    static uint8_t own_addr_type;
+    static uint8_t addr_val[6] = {0};
+    static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    static uint16_t s_status_handle;
+    static uint16_t s_batt_handle;
+    static uint16_t s_data_handle;
+    static uint16_t s_xfer_handle;
+    static bool s_data_subscribed = false;
 
-void start_imulogs();
-void stop_imulogs();
-esp_err_t stop_webserver(void);
-esp_err_t start_webserver(void);
-uint8_t   ble_status_flags(void);
-void ble_notify_status(void);   /* push current status byte to the connected phone */
+    uint8_t BatteryLevelRead(void); /* defined in main.c */
+    void ble_notify_battery(void);
+
+    esp_err_t init_ble(void);
+    static int gap_event_handler(struct ble_gap_event *event, void *arg);
+
+    /* Library function declarations */
+    void ble_store_config_init(void);
+
+    void start_imulogs();
+    void stop_imulogs();
+    esp_err_t stop_webserver(void);
+    esp_err_t start_webserver(void);
+    uint8_t ble_status_flags(void);
+    void ble_notify_status(void); /* push current status byte to the connected phone */
+    int ble_notify_data(const uint8_t *data, uint16_t len);
+    void ble_notify_xfer(uint8_t evt, uint32_t a, uint32_t b);
+    uint16_t ble_data_payload_len(void); /* max payload per Data packet (excl. 4-byte offset) */
+    esp_err_t imu_download_start(bool full, uint32_t start_sector);
+    void imu_download_stop(uint8_t reason);
 
 #ifdef __cplusplus
 }
