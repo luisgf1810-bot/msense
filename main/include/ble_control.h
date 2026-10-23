@@ -115,15 +115,13 @@ extern "C"
 
     void start_imulogs();
     void stop_imulogs();
-    esp_err_t stop_webserver(void);
-    esp_err_t start_webserver(void);
-    uint8_t ble_status_flags(void);
-    void ble_notify_status(void); /* push current status byte to the connected phone */
-    int ble_notify_data(const uint8_t *data, uint16_t len);
-    void ble_notify_xfer(uint8_t evt, uint32_t a, uint32_t b);
-    uint16_t ble_data_payload_len(void); /* max payload per Data packet (excl. 4-byte offset) */
-    esp_err_t imu_download_start(bool full, uint32_t start_sector);
-    void imu_download_stop(uint8_t reason);
+    uint8_t     ble_status_flags(void);
+    void        ble_notify_status(void); /* push current status byte to the connected phone */
+    int         ble_notify_data(const uint8_t *data, uint16_t len);
+    void        ble_notify_xfer(uint8_t evt, uint32_t a, uint32_t b);
+    uint16_t    ble_data_payload_len(void); /* max payload per Data packet (excl. 4-byte offset) */
+    esp_err_t   imu_download_start(bool full, uint32_t start_sector);
+    void        imu_download_stop(uint8_t reason);
 
 #ifdef __cplusplus
 }

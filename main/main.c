@@ -601,7 +601,6 @@ esp_err_t flash_log_stop(void) {
     return ESP_OK;
 }
 
-
 static bool flash_buffers_idle(void)
 {
     taskENTER_CRITICAL(&s_mux);
@@ -864,7 +863,7 @@ uint8_t ble_status_flags(void)
 
 void start_imulogs() {
 
-     if (!s_timesync_state) {          /* already logging (or stopping) */
+    if (!s_timesync_state) {          /* already logging (or stopping) */
         return;
     }
 
