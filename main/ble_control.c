@@ -68,9 +68,11 @@ static int gatt_access_cmd(uint16_t conn_handle, uint16_t attr_handle,
                                ((uint32_t)data[4] << 16) | ((uint32_t)data[5] << 24);
             }
             if (!s_data_subscribed) {
+                ESP_LOGW(BLETAG, "download start failed: not subscribed to Data");
                 return BLE_ATT_ERR_WRITE_NOT_PERMITTED;  /* subscribe to Data first */
             }
             if (imu_download_start(full, start_sector) != ESP_OK) {
+                ESP_LOGW(BLETAG, "download start failed: logging active / already running / no data");
                 return BLE_ATT_ERR_UNLIKELY;  /* logging active / already running / no data */
             }
             break;

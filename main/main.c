@@ -725,6 +725,7 @@ esp_err_t imu_download_start(bool full, uint32_t start_sector)
         return ESP_ERR_INVALID_STATE;
     }
     if (s_dl_active) {
+        ESP_LOGW(TAG, "download refused: already active");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -733,6 +734,8 @@ esp_err_t imu_download_start(bool full, uint32_t start_sector)
     uint32_t total = full ? (uint32_t)(s_partition->size / FLASH_SECTOR_SIZE) : stats.next_sector;
 
     if (total == 0 || start_sector >= total) {
+        ESP_LOGW(TAG, "download refused: invalid sector range %" PRIu32 "..%" PRIu32,
+                 start_sector, total - 1);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -742,6 +745,7 @@ esp_err_t imu_download_start(bool full, uint32_t start_sector)
     s_dl_reason       = 0;
     s_dl_active       = true;
     xTaskNotifyGive(s_dl_task);
+    
     return ESP_OK;
 }
 
