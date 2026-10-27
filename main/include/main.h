@@ -99,7 +99,6 @@ static bool s_timesync_state = true;
 #define SECTOR_SIZE 4096UL
 #define STREAM_BUFFER_SIZE (SECTOR_SIZE * 4) // 16KB RAM buffer to absorb flash erase latency
 #define IMU_LOG_PARTITION_LABEL "imu_log"
-#define IMU_SAMPLE_PERIOD_US 10000 /* 10 ms -> 100 Hz */
 #define FLASH_SECTOR_SIZE 4096u
 #define SECTOR_MAGIC 0x494D5546u /* "IMUF" */
 
