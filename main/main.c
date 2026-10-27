@@ -441,7 +441,7 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
             sample.linear_accel.y       = value->data.linear_acceleration.y;
             sample.linear_accel.z       = value->data.linear_acceleration.z;
 
-            if (rate>30) printf("%ld,%ld\n",rate ,sample.timestamp_ms); 
+            //if (rate>30) printf("%ld,%ld\n",rate ,sample.timestamp_ms); 
 
             break;
 
