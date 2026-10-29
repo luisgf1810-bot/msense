@@ -450,10 +450,6 @@ static void on_sensor_data(bno085_handle_t handle, const bno085_sensor_value_t *
                
     }
 
-    /*if ((rate % 194)==0) {
-        ns+=1;
-        printf("%.4f - %d\n",  (double)1000000/((te-ti)/rate), ns);
-    }*/
 
     taskENTER_CRITICAL(&s_mux);
 
@@ -971,6 +967,10 @@ void stop_imulogs() {
 
     // start led blinking
     gptimer_period=TIMESYNC_BLINK_HZ;
+
+    taskENTER_CRITICAL(&s_mux);
+    s_stop_busy = false;
+    taskEXIT_CRITICAL(&s_mux);
 }
 
 

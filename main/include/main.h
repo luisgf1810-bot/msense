@@ -67,12 +67,12 @@ uint8_t _lowvoltage_counter = 0;
 #define GPTIMER_RESOLUTION_HZ (1000000ULL) // 1 MHz (1 tick = 1 us)
 #define TIMESYNC_BLINK_HZ (4000000ULL)
 
-static TaskHandle_t s_gptimer_task = NULL;
+static TaskHandle_t     s_gptimer_task = NULL;
 static gptimer_handle_t s_gptimer = NULL;
-static QueueHandle_t s_gptimer_evt_q = NULL;
-static portMUX_TYPE s_gptimer_lock = portMUX_INITIALIZER_UNLOCKED;
-static uint64_t gptimer_period = TIMESYNC_BLINK_HZ;
-static volatile bool s_timer_started = false;
+static QueueHandle_t    s_gptimer_evt_q = NULL;
+static portMUX_TYPE     s_gptimer_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint64_t         gptimer_period = TIMESYNC_BLINK_HZ;
+static volatile bool    s_timer_started = false;
 
 // LED
 #define LED_SLP_PIN 20
